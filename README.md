@@ -222,6 +222,12 @@ and a label. That is a feature at scale and a limitation in dialogue.
 If deterministic code already decides the case correctly, keep the deterministic
 code. Typed output guarantees the interface, not the truth. Measure before adopting.
 
+Do not ask Jev to compute. It is a one-pass chooser with no scratchpad, so counting,
+arithmetic, date comparison, and threshold cutoffs are unreliable, and the answer still
+comes back with a confident probability. Do that work in code and pass the result in as
+a fact. Add a reference date to `state` for any question about "today". See TypeSafe's
+[numeric and date limitations](https://docs.typesafe.ai/model-jaggedness/jev-1.13).
+
 ## Development
 
 ```bash

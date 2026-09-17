@@ -158,4 +158,11 @@ Do not batch questions about unrelated subjects. One state, one subject.
 
 Do not use a Score for a category, or a Choice for a degree.
 
+Do not ask Jev to compute. It has no scratchpad, so it cannot count, add, compare
+dates, or apply a cutoff reliably, and it returns a confident probability anyway.
+"Is this user over 18?" fails on a birth date and works on "the user is 17". Keep
+arithmetic, counting, and date comparison in code, then hand Jev the result as a fact.
+When a question mentions today, put the date in `state`; Jev has no clock. TypeSafe
+documents this in [numeric and date limitations](https://docs.typesafe.ai/model-jaggedness/jev-1.13).
+
 Do not paste secrets, keys, or credentials into `state`.
