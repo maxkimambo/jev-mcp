@@ -223,8 +223,11 @@ npm test          # offline: unit tests plus regression tests against a local st
 npm run test:e2e  # live, requires TYPESAFE_API_KEY
 ```
 
-To run your local build instead of the npm release, register it directly and skip
-the plugin, since the plugin always launches the published version:
+Inside this repo the plugin's server fails to connect. `npx jev-mcp@<version>` sees a
+local project already named `jev-mcp` at that version, skips the registry, and looks
+for a bin that is never linked into the project's own `node_modules`. Every other
+directory is fine. For work in this checkout, register the local build directly and
+skip the plugin, since the plugin always launches the published version:
 
 ```bash
 claude mcp add --scope user jev -- node /absolute/path/to/jev-mcp/dist/index.js
