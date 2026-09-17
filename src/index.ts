@@ -15,6 +15,9 @@
  *  4. Nothing is silently dropped, overwritten, or truncated. A request that
  *     cannot be honoured exactly fails with a reason.
  *  5. Nothing but JSON-RPC is ever written to stdout.
+ *  6. Every answer is checked against the question that was sent. A choice
+ *     that was never offered, or a distribution that does not cover the
+ *     offered options, is an error rather than a result.
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -37,6 +40,9 @@ import {
   gateConfidence,
   gateProbability,
   readPositiveInt,
+  validateChoiceAnswer,
+  validateNoulAnswer,
+  validateScoreAnswer,
 } from "./lib.js";
 
 // Read from package.json so the advertised version cannot drift from the release.
@@ -97,6 +103,7 @@ const InstructionSchema = z
 const DescriptionSchema = z.union([z.string(), z.record(z.any()), z.array(z.any()), z.null()]);
 
 const UsageSchema = z.object({ input_tokens: z.number(), output_tokens: z.number() });
+const LatencySchema = z.number().describe("Wall-clock milliseconds for the API round trip, for your own calibration logs.");
 const GateSchema = z.enum(["act", "review", "abstain"]);
 
 const ActAbove = z
@@ -209,6 +216,7 @@ server.registerTool(
       thresholds: z.object({ act_above: z.number(), review_above: z.number() }),
       model: z.string(),
       usage: UsageSchema,
+      latency_ms: LatencySchema,
     },
   },
   async ({ state, question, options, add_none, act_above, review_above }, extra) => {
@@ -218,11 +226,14 @@ server.registerTool(
       const reviewAbove = review_above ?? 0.5;
       const { criteria, noneKey } = buildChoiceCriteria(options as Record<string, EntryType>, add_none !== false);
 
+      const started = performance.now();
       const result = await getClient().systemOne(
         { state, model: MODEL, questions: { classify: choice(question, criteria) } },
         { signal: extra.signal },
       );
+      const latency_ms = Math.round(performance.now() - started);
       const answer = result.answers.classify;
+      validateChoiceAnswer(answer, Object.keys(criteria), "classify");
       return ok({
         choice: answer.choice,
         confidence: answer.confidence,
@@ -232,6 +243,7 @@ server.registerTool(
         thresholds: { act_above: actAbove, review_above: reviewAbove },
         model: result.model,
         usage: result.usage,
+        latency_ms,
       });
     } catch (error) {
       return fail(error);
@@ -267,6 +279,7 @@ server.registerTool(
       thresholds: z.object({ act_above: z.number(), review_above: z.number() }),
       model: z.string(),
       usage: UsageSchema,
+      latency_ms: LatencySchema,
     },
   },
   async ({ state, question, levels, act_above, review_above }, extra) => {
@@ -278,12 +291,15 @@ server.registerTool(
       const actAbove = act_above ?? 0.8;
       const reviewAbove = review_above ?? 0.5;
 
+      const started = performance.now();
       const result = await getClient().systemOne(
         // zod already enforces two or more levels; the SDK types that as a tuple.
         { state, model: MODEL, questions: { rating: score(question, levels as unknown as ScoreCriteria) } },
         { signal: extra.signal },
       );
+      const latency_ms = Math.round(performance.now() - started);
       const answer = result.answers.rating;
+      validateScoreAnswer(answer, levels.length, "rating");
       return ok({
         score: answer.score,
         confidence: answer.confidence,
@@ -293,6 +309,7 @@ server.registerTool(
         thresholds: { act_above: actAbove, review_above: reviewAbove },
         model: result.model,
         usage: result.usage,
+        latency_ms,
       });
     } catch (error) {
       return fail(error);
@@ -323,6 +340,7 @@ server.registerTool(
       thresholds: z.object({ yes_at_or_above: z.number(), no_at_or_below: z.number() }),
       model: z.string(),
       usage: UsageSchema,
+      latency_ms: LatencySchema,
     },
   },
   async ({ state, question, yes_means, no_means, yes_at_or_above, no_at_or_below }, extra) => {
@@ -337,10 +355,13 @@ server.registerTool(
           ? { true: yes_means ?? null, false: no_means ?? null }
           : undefined;
 
+      const started = performance.now();
       const result = await getClient().systemOne(
         { state, model: MODEL, questions: { check: criteria ? noul(question, criteria) : noul(question) } },
         { signal: extra.signal },
       );
+      const latency_ms = Math.round(performance.now() - started);
+      validateNoulAnswer(result.answers.check, "check");
       const probability = result.answers.check.noul;
       return ok({
         probability_yes: probability,
@@ -348,6 +369,7 @@ server.registerTool(
         thresholds: { yes_at_or_above: yesAt, no_at_or_below: noAt },
         model: result.model,
         usage: result.usage,
+        latency_ms,
       });
     } catch (error) {
       return fail(error);
@@ -389,6 +411,7 @@ server.registerTool(
       none_options: z.record(z.string().nullable()).describe("For each 'classify' question, the key carrying the no-match meaning, or null."),
       model: z.string(),
       usage: UsageSchema,
+      latency_ms: LatencySchema,
     },
   },
   async ({ state, questions, act_above, review_above }, extra) => {
@@ -403,6 +426,8 @@ server.registerTool(
 
       const built: Record<string, Question> = {};
       const noneOptions: Record<string, string | null> = {};
+      // What each answer must be checked against once it comes back.
+      const expected: Record<string, { type: "classify"; keys: string[] } | { type: "score"; levels: number } | { type: "check" }> = {};
 
       for (const q of questions) {
         if (q.type === "classify") {
@@ -410,33 +435,45 @@ server.registerTool(
           const { criteria, noneKey } = buildChoiceCriteria(q.options as Record<string, EntryType>, q.add_none !== false, `options for '${q.id}'`);
           built[q.id] = choice(q.question, criteria);
           noneOptions[q.id] = noneKey;
+          expected[q.id] = { type: "classify", keys: Object.keys(criteria) };
         } else if (q.type === "score") {
           if (!q.levels) throw new Error(`Question '${q.id}' is type 'score' and needs levels.`);
           if (q.levels.length > DEFAULT_MAX_SCORE_LEVELS) {
             throw new Error(`levels for '${q.id}' must contain at most ${DEFAULT_MAX_SCORE_LEVELS} entries.`);
           }
           built[q.id] = score(q.question, q.levels as unknown as ScoreCriteria);
+          expected[q.id] = { type: "score", levels: q.levels.length };
         } else {
           const criteria =
             q.yes_means !== undefined || q.no_means !== undefined
               ? { true: q.yes_means ?? null, false: q.no_means ?? null }
               : undefined;
           built[q.id] = criteria ? noul(q.question, criteria) : noul(q.question);
+          expected[q.id] = { type: "check" };
         }
       }
 
+      const started = performance.now();
       const result = await getClient().systemOne({ state, model: MODEL, questions: built }, { signal: extra.signal });
+      const latency_ms = Math.round(performance.now() - started);
 
-      // Attach the confidence gate where there is a confidence to gate on.
+      // Every question sent must come back well-formed. A missing answer is an
+      // error, not a silently absent key, so a caller never acts on a partial set.
+      const raw = result.answers as unknown as Record<string, Record<string, unknown>>;
       const answers: Record<string, unknown> = {};
-      for (const [id, answer] of Object.entries(result.answers as unknown as Record<string, Record<string, unknown>>)) {
+      for (const [id, want] of Object.entries(expected)) {
+        const answer = raw[id];
+        if (want.type === "classify") validateChoiceAnswer(answer, want.keys, id);
+        else if (want.type === "score") validateScoreAnswer(answer, want.levels, id);
+        else validateNoulAnswer(answer, id);
+        // Attach the confidence gate where there is a confidence to gate on.
         answers[id] =
           typeof answer?.confidence === "number"
             ? { ...answer, action: gateConfidence(answer.confidence, actAbove, reviewAbove) }
             : answer;
       }
 
-      return ok({ answers, none_options: noneOptions, model: result.model, usage: result.usage });
+      return ok({ answers, none_options: noneOptions, model: result.model, usage: result.usage, latency_ms });
     } catch (error) {
       return fail(error);
     }

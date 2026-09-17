@@ -120,6 +120,11 @@ premise explicitly and let your own code decide which answers apply.
 4. **Nothing is silently dropped, overwritten, or truncated.** A request that cannot
    be honoured exactly fails with a reason instead of quietly changing meaning.
 5. **Only JSON-RPC reaches stdout.** Logs go to stderr, always.
+6. **Every answer is checked against the question sent.** A choice that was never
+   offered, a distribution over the wrong options, a legend that does not match the
+   levels, or a missing answer in a batch is an error of kind `malformed_response`,
+   never a result. A caller that trusted the label alone would otherwise execute
+   something it never proposed.
 
 ### The no-match option
 
@@ -152,8 +157,12 @@ A Noul near 0.5 means yes and no are close to equally likely, not that the answe
 Failures come back with `isError` and a classified body: `kind`, `retryable`, and
 where available `status`, `requestId`, and a `hint`. A rejected key (`authentication`,
 never retryable) is distinguishable from a rate limit (`rate_limit`, retryable) and
-from a malformed question (`invalid_request`). The SDK already retries 408, 429, and
-5xx with backoff before an error surfaces here.
+from a malformed question (`invalid_request`) and from an answer that fails validation
+against the question (`malformed_response`, retryable, nothing to act on). The SDK
+already retries 408, 429, and 5xx with backoff before an error surfaces here.
+
+Every judgment result also carries `latency_ms` for the API round trip, so calibration
+notes can record cost alongside confidence.
 
 ### Limits
 

@@ -10,10 +10,14 @@ import {
   describeError,
   gateConfidence,
   gateProbability,
+  MalformedResponseError,
   MAX_CHOICE_OPTIONS,
   readPositiveInt,
   resolveNoneKey,
   stateSize,
+  validateChoiceAnswer,
+  validateNoulAnswer,
+  validateScoreAnswer,
 } from "../dist/lib.js";
 
 test("readPositiveInt falls back loudly instead of yielding NaN", () => {
@@ -119,4 +123,64 @@ test("describeError separates failures a caller should treat differently", () =>
   const overloaded = describeError(APIError.fromResponse(529, {}, new Headers()));
   assert.equal(overloaded.kind, "server_error");
   assert.equal(overloaded.retryable, true);
+});
+
+// ── Answer validation ───────────────────────────────────────────────────────
+
+const KEYS = ["a", "b", "none"];
+const goodChoice = { type: "choice", choice: "a", confidence: 0.8, probabilities: { a: 0.8, b: 0.15, none: 0.05 } };
+
+test("validateChoiceAnswer accepts a well-formed answer", () => {
+  assert.doesNotThrow(() => validateChoiceAnswer(goodChoice, KEYS, "q"));
+});
+
+test("validateChoiceAnswer rejects a choice that was never offered", () => {
+  const answer = { ...goodChoice, choice: "c", probabilities: { a: 0.8, b: 0.15, none: 0.05 } };
+  assert.throws(() => validateChoiceAnswer(answer, KEYS, "q"), MalformedResponseError);
+});
+
+test("validateChoiceAnswer rejects a distribution over the wrong options", () => {
+  const missing = { ...goodChoice, probabilities: { a: 0.9, b: 0.1 } };
+  assert.throws(() => validateChoiceAnswer(missing, KEYS, "q"), /offered/);
+  const extra = { ...goodChoice, probabilities: { a: 0.8, b: 0.1, none: 0.05, c: 0.05 } };
+  assert.throws(() => validateChoiceAnswer(extra, KEYS, "q"), /offered/);
+});
+
+test("validateChoiceAnswer rejects probabilities that do not sum to one", () => {
+  const answer = { ...goodChoice, probabilities: { a: 0.9, b: 0.9, none: 0.1 } };
+  assert.throws(() => validateChoiceAnswer(answer, KEYS, "q"), /summing/);
+});
+
+test("validateChoiceAnswer rejects a choice that is not the most probable option", () => {
+  const answer = { ...goodChoice, choice: "b" };
+  assert.throws(() => validateChoiceAnswer(answer, KEYS, "q"), /highest probability/);
+});
+
+test("validateChoiceAnswer rejects NaN, out-of-range, and missing values", () => {
+  assert.throws(() => validateChoiceAnswer({ ...goodChoice, confidence: NaN }, KEYS, "q"), MalformedResponseError);
+  assert.throws(() => validateChoiceAnswer({ ...goodChoice, probabilities: { a: 1.5, b: -0.4, none: -0.1 } }, KEYS, "q"), MalformedResponseError);
+  assert.throws(() => validateChoiceAnswer(undefined, KEYS, "q"), /No answer/);
+  assert.throws(() => validateChoiceAnswer("a", KEYS, "q"), /No answer/);
+});
+
+test("validateScoreAnswer checks the legend and distribution against the levels sent", () => {
+  const good = { type: "score", score: 1.2, confidence: 0.7, legend: { 0: "low", 1: "mid", 2: "high" }, probabilities: { 0: 0.1, 1: 0.6, 2: 0.3 } };
+  assert.doesNotThrow(() => validateScoreAnswer(good, 3, "r"));
+  assert.throws(() => validateScoreAnswer(good, 4, "r"), /legend of 3 levels/);
+  assert.throws(() => validateScoreAnswer({ ...good, score: Infinity }, 3, "r"), /finite score/);
+  assert.throws(() => validateScoreAnswer({ ...good, probabilities: { 0: 0.5, 1: 0.5 } }, 3, "r"), /offered/);
+});
+
+test("validateNoulAnswer requires one probability in [0, 1]", () => {
+  assert.doesNotThrow(() => validateNoulAnswer({ type: "noul", noul: 0.42 }, "c"));
+  for (const bad of [{ noul: 1.2 }, { noul: NaN }, { noul: "0.4" }, {}, undefined]) {
+    assert.throws(() => validateNoulAnswer(bad, "c"), MalformedResponseError);
+  }
+});
+
+test("describeError classifies a malformed response as retryable and never actionable", () => {
+  const described = describeError(new MalformedResponseError("bad"));
+  assert.equal(described.kind, "malformed_response");
+  assert.equal(described.retryable, true);
+  assert.match(described.hint, /should be acted on/i);
 });

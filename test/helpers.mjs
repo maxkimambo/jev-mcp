@@ -18,7 +18,9 @@ const KEY_VAR = ["TYPESAFE", "API", "KEY"].join("_");
 /** Start a stand-in API that records requests and returns well-formed answers. */
 export async function startMock() {
   const requests = [];
-  const state = { confidence: 0.9, noul: 0.5, status: 200, body: null };
+  // `answers`, when set, replaces the generated answers verbatim, so a test
+  // can hand the server a malformed response and prove it is rejected.
+  const state = { confidence: 0.9, noul: 0.5, status: 200, body: null, answers: null };
 
   const server = createServer((req, res) => {
     let raw = "";
@@ -57,7 +59,8 @@ export async function startMock() {
             type: "choice",
             choice: keys[0] ?? "x",
             confidence: state.confidence,
-            probabilities: Object.fromEntries(keys.map((k, i) => [k, i === 0 ? 0.9 : 0.1])),
+            // A real distribution: the winner takes 0.9, the rest share 0.1.
+            probabilities: Object.fromEntries(keys.map((k, i) => [k, i === 0 ? 0.9 : 0.1 / Math.max(keys.length - 1, 1)])),
           };
         } else {
           const levels = (q.criteria ?? []).map((_, i) => String(i));
@@ -71,7 +74,7 @@ export async function startMock() {
         }
       }
       res.writeHead(200);
-      res.end(JSON.stringify({ model: "mock-jev", answers, usage: { input_tokens: 10, output_tokens: 2 } }));
+      res.end(JSON.stringify({ model: "mock-jev", answers: state.answers ?? answers, usage: { input_tokens: 10, output_tokens: 2 } }));
     });
   });
 

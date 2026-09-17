@@ -207,6 +207,7 @@ export type ErrorKind =
   | "connection"
   | "cancelled"
   | "invalid_arguments"
+  | "malformed_response"
   | "unknown";
 
 export interface DescribedError {
@@ -231,6 +232,14 @@ export interface DescribedError {
 export function describeError(error: unknown): DescribedError {
   const message = error instanceof Error ? error.message : String(error);
 
+  if (error instanceof MalformedResponseError) {
+    return {
+      kind: "malformed_response",
+      message,
+      retryable: true,
+      hint: "The API returned an answer that does not match the question sent. Nothing here should be acted on. Retry once; if it persists, report it with the model id.",
+    };
+  }
   if (error instanceof APIUserAbortError) {
     return { kind: "cancelled", message, retryable: false, hint: "The client cancelled the request." };
   }
@@ -276,4 +285,108 @@ export function describeError(error: unknown): DescribedError {
   }
 
   return { kind: "invalid_arguments", message, retryable: false };
+}
+
+// ── Answer validation ───────────────────────────────────────────────────────
+
+/**
+ * Thrown when the API returns an answer that does not match the question that
+ * was sent. Nothing downstream should act on such an answer.
+ */
+export class MalformedResponseError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "MalformedResponseError";
+  }
+}
+
+/** Probabilities may drift a little in serialization; more than this is a bug. */
+export const PROBABILITY_SUM_TOLERANCE = 0.02;
+
+function isUnitInterval(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1;
+}
+
+function sameKeySet(actual: readonly string[], expected: readonly string[]): boolean {
+  if (actual.length !== expected.length) return false;
+  const set = new Set(expected);
+  return actual.every((key) => set.has(key));
+}
+
+/** A finite distribution over exactly the expected keys that sums to about one. */
+function checkDistribution(probabilities: unknown, expectedKeys: readonly string[], label: string): Record<string, number> {
+  if (typeof probabilities !== "object" || probabilities === null || Array.isArray(probabilities)) {
+    throw new MalformedResponseError(`Answer '${label}' has no probabilities object.`);
+  }
+  const dist = probabilities as Record<string, unknown>;
+  if (!sameKeySet(Object.keys(dist), expectedKeys)) {
+    throw new MalformedResponseError(
+      `Answer '${label}' has probabilities for ${JSON.stringify(Object.keys(dist))}, but the question offered ${JSON.stringify(expectedKeys)}.`,
+    );
+  }
+  let sum = 0;
+  for (const [key, value] of Object.entries(dist)) {
+    if (!isUnitInterval(value)) throw new MalformedResponseError(`Answer '${label}' has a probability outside [0, 1] for '${key}'.`);
+    sum += value;
+  }
+  if (Math.abs(sum - 1) > PROBABILITY_SUM_TOLERANCE) {
+    throw new MalformedResponseError(`Answer '${label}' has probabilities summing to ${sum.toFixed(3)}, not 1.`);
+  }
+  return dist as Record<string, number>;
+}
+
+function asRecord(answer: unknown, label: string): Record<string, unknown> {
+  if (typeof answer !== "object" || answer === null || Array.isArray(answer)) {
+    throw new MalformedResponseError(`No answer came back for '${label}'.`);
+  }
+  return answer as Record<string, unknown>;
+}
+
+/**
+ * Check a Choice answer against the options that were sent.
+ *
+ * The selected option must be one that was offered, the distribution must
+ * cover exactly those options, and the selection must carry the highest
+ * probability. Any of these failing means the answer cannot be trusted, and a
+ * caller acting on `choice` alone would execute something never offered.
+ */
+export function validateChoiceAnswer(answer: unknown, expectedKeys: readonly string[], label: string): void {
+  const a = asRecord(answer, label);
+  if (typeof a.choice !== "string" || !expectedKeys.includes(a.choice)) {
+    throw new MalformedResponseError(`Answer '${label}' chose ${JSON.stringify(a.choice)}, which was not among the offered options.`);
+  }
+  if (!isUnitInterval(a.confidence)) throw new MalformedResponseError(`Answer '${label}' has no confidence in [0, 1].`);
+  const dist = checkDistribution(a.probabilities, expectedKeys, label);
+  const top = Math.max(...Object.values(dist));
+  if ((dist[a.choice] ?? -1) < top - 1e-6) {
+    throw new MalformedResponseError(`Answer '${label}' chose '${a.choice}' but a different option carries the highest probability.`);
+  }
+}
+
+/**
+ * Check a Score answer against the number of levels that were sent.
+ *
+ * The legend and the distribution must both describe exactly the levels
+ * offered, and the score itself must be a finite number.
+ */
+export function validateScoreAnswer(answer: unknown, levelCount: number, label: string): void {
+  const a = asRecord(answer, label);
+  if (typeof a.score !== "number" || !Number.isFinite(a.score)) {
+    throw new MalformedResponseError(`Answer '${label}' has no finite score.`);
+  }
+  if (!isUnitInterval(a.confidence)) throw new MalformedResponseError(`Answer '${label}' has no confidence in [0, 1].`);
+  if (typeof a.legend !== "object" || a.legend === null || Array.isArray(a.legend)) {
+    throw new MalformedResponseError(`Answer '${label}' has no legend.`);
+  }
+  const legendKeys = Object.keys(a.legend as Record<string, unknown>);
+  if (legendKeys.length !== levelCount) {
+    throw new MalformedResponseError(`Answer '${label}' has a legend of ${legendKeys.length} levels; the question sent ${levelCount}.`);
+  }
+  checkDistribution(a.probabilities, legendKeys, label);
+}
+
+/** Check a Noul answer: one finite probability in [0, 1]. */
+export function validateNoulAnswer(answer: unknown, label: string): void {
+  const a = asRecord(answer, label);
+  if (!isUnitInterval(a.noul)) throw new MalformedResponseError(`Answer '${label}' has no probability in [0, 1].`);
 }

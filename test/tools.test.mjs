@@ -370,3 +370,66 @@ test("one jev_ask call batches every question into a single request", async () =
     await mock.close();
   }
 });
+
+// ── Answer validation on the wire ───────────────────────────────────────────
+
+test("regression: a choice the model was never offered is an error, not a result", async () => {
+  const mock = await startMock();
+  try {
+    mock.state.answers = {
+      classify: { type: "choice", choice: "delete_everything", confidence: 0.99, probabilities: { delete_everything: 0.99, safe: 0.01 } },
+    };
+    await withClient({ baseUrl: mock.url }, async (client) => {
+      const result = await client.callTool({
+        name: "jev_classify",
+        arguments: { state: "rm -rf build/", question: "Which operation?", options: { safe: "Reads only", risky: "Destroys work" } },
+      });
+      assert.equal(result.isError, true, "an unoffered choice must not come back as a result");
+      const { error } = payload(result);
+      assert.equal(error.kind, "malformed_response");
+      assert.match(error.message, /delete_everything/);
+    });
+  } finally {
+    await mock.close();
+  }
+});
+
+test("regression: jev_ask fails when any answer is missing or malformed instead of returning a partial set", async () => {
+  const mock = await startMock();
+  try {
+    mock.state.answers = { first: { type: "noul", noul: 0.2 } };
+    await withClient({ baseUrl: mock.url }, async (client) => {
+      const result = await client.callTool({
+        name: "jev_ask",
+        arguments: {
+          state: "x",
+          questions: [
+            { id: "first", type: "check", question: "A?" },
+            { id: "second", type: "check", question: "B?" },
+          ],
+        },
+      });
+      assert.equal(result.isError, true, "a missing answer must fail the whole call");
+      const { error } = payload(result);
+      assert.equal(error.kind, "malformed_response");
+      assert.match(error.message, /second/);
+    });
+  } finally {
+    await mock.close();
+  }
+});
+
+test("every judgment tool reports the round-trip latency", async () => {
+  const mock = await startMock();
+  try {
+    await withClient({ baseUrl: mock.url }, async (client) => {
+      const result = await client.callTool({ name: "jev_check", arguments: { state: "hello", question: "Greeting?" } });
+      assert.equal(result.isError, undefined);
+      const body = payload(result);
+      assert.equal(typeof body.latency_ms, "number");
+      assert.ok(body.latency_ms >= 0);
+    });
+  } finally {
+    await mock.close();
+  }
+});
