@@ -11,28 +11,78 @@ it behind a label.
 Requires Node 20.12+ and a TypeSafe API key from
 [console.typesafe.ai](https://console.typesafe.ai/settings/keys).
 
-```bash
-npm install
-npm run build
-```
+### Claude Code plugin
 
-Register with Claude Code:
+One marketplace add, one install. This registers the server and the agent skill
+together, so there is no separate skill step.
 
 ```bash
-claude mcp add --scope user jev -- node /absolute/path/to/jev-mcp/dist/index.js
+/plugin marketplace add rashedInt32/jev-mcp
+/plugin install jev@jev-mcp
 ```
 
-The key is read from `TYPESAFE_API_KEY` in the server's environment. It is never a
-tool argument, so it cannot land in a transcript or in a model's context. Put it in
-`~/.zshenv` rather than in any repo, and make sure it is **exported**:
+The plugin runs the published package through `npx -y jev-mcp@<version>`, so nothing
+needs building. The first launch downloads the package, so allow a few seconds before
+the server shows as connected in `claude mcp list`.
+
+### Any MCP client
+
+```bash
+claude mcp add --scope user jev -- npx -y jev-mcp
+```
+
+Or in a client's JSON config:
+
+```json
+{
+  "mcpServers": {
+    "jev": { "command": "npx", "args": ["-y", "jev-mcp"] }
+  }
+}
+```
+
+Do not register the server directly **and** install the plugin. Two servers named
+`jev` will otherwise both register.
+
+### The key
+
+The server reads the key from `TYPESAFE_API_KEY` in its environment, then from
+`JEV_API_KEY`, then from `~/.config/typesafe/key`. It is never a tool argument, so it
+cannot land in a transcript or in a model's context.
+
+The key file is the most reliable source, because some MCP clients strip the
+environment before spawning servers:
 
 ```sh
-export TYPESAFE_API_KEY="ts_..."
+mkdir -p ~/.config/typesafe
+printf '%s' "ts_..." > ~/.config/typesafe/key
+chmod 600 ~/.config/typesafe/key
 ```
 
-Without `export` the variable exists only in the shell that read it. Child processes,
-including every MCP server Claude Code spawns, never see it, and every tool call fails
-with a missing-key error.
+If you prefer the variable, put it in `~/.zshenv` rather than in any repo, and make
+sure it is **exported**. Without `export` the variable exists only in the shell that
+read it, and every server Claude Code spawns fails with a missing-key error.
+
+### Plugin internals
+
+The server is declared **inline** under `mcpServers` in `.claude-plugin/plugin.json`.
+There is no `.mcp.json` anywhere in the repo, and that is deliberate.
+
+A `.mcp.json` at the plugin root is auto-discovered by the plugin loader, so it works.
+But any session opened in this directory *also* reads that same file as a project
+config, where `${CLAUDE_PLUGIN_ROOT}` is undefined. The result is a missing-variable
+warning and a scope conflict on the same server name. The inline form has exactly one
+loader and produces neither. Verify with `claude mcp list`: the server appears as
+`plugin:jev:jev` and the diagnostics section stays empty.
+
+One trap. `claude plugin details jev` reports `MCP servers (0)` for an inline
+declaration even while the server is connected and working. That is a gap in the
+inventory count, not a failure. Trust `claude mcp list` over `plugin details` here.
+
+The plugin deliberately ships **no `env` block**. Naming the key there would expand to
+an empty string when the variable is unset, and an empty string is not nullish, so it
+would shadow the `~/.config/typesafe/key` fallback and turn a working setup into a
+missing-key error. Leaving `env` out keeps all three key sources live.
 
 ## Tools
 
@@ -113,6 +163,19 @@ Question count and state size are local caps that bound cost on a single call, a
 both are configurable. Oversized state is rejected rather than truncated, because
 truncating silently changes the material the judgment rests on.
 
+## Agent skill
+
+`skills/jev/SKILL.md` teaches an agent when to reach for these tools and how to shape
+the call. It is a bridge, not a tutorial. Primitive semantics, state design, and
+composition patterns live in TypeSafe's own `typesafe-ai` skill and in the docs, so
+this one deliberately does not repeat them.
+
+Its first section is a three-way test: answer it yourself, call a tool, or write SDK
+code. That test follows the same line as [When not to reach for this](#when-not-to-reach-for-this)
+below, so an agent loading the skill does not end up arguing with this README.
+
+Point your client at the directory, or copy the file to `~/.claude/skills/jev/`.
+
 ## Configuration
 
 | Variable | Effect |
@@ -153,10 +216,23 @@ code. Typed output guarantees the interface, not the truth. Measure before adopt
 ## Development
 
 ```bash
+npm ci
+npm run build
 npm run typecheck
 npm test          # offline: unit tests plus regression tests against a local stand-in
 npm run test:e2e  # live, requires TYPESAFE_API_KEY
 ```
+
+To run your local build instead of the npm release, register it directly and skip
+the plugin, since the plugin always launches the published version:
+
+```bash
+claude mcp add --scope user jev -- node /absolute/path/to/jev-mcp/dist/index.js
+```
+
+Releasing: bump `version` in `package.json`, `.claude-plugin/plugin.json`, and
+`.claude-plugin/marketplace.json` together, then `npm publish`. The plugin cache is
+keyed by version, so an unbumped plugin keeps serving the old snapshot.
 
 The offline suite runs the real built server over stdio against a local stand-in for
 the TypeSafe API and asserts on the request bodies it actually sends, so a regression

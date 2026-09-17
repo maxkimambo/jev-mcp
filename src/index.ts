@@ -39,7 +39,16 @@ import {
   readPositiveInt,
 } from "./lib.js";
 
-const VERSION = "0.2.0";
+// Read from package.json so the advertised version cannot drift from the release.
+const VERSION: string = (() => {
+  try {
+    const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version?: unknown };
+    if (typeof pkg.version === "string" && pkg.version.length > 0) return pkg.version;
+  } catch {
+    // fall through
+  }
+  return "0.0.0";
+})();
 
 // ── Configuration ───────────────────────────────────────────────────────────
 

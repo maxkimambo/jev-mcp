@@ -1,0 +1,29 @@
+{
+  "name": "jev-mcp",
+  "description": "TypeSafe Jev as typed judgment tools for coding agents.",
+  "owner": {
+    "name": "rashed parvez",
+    "url": "https://github.com/rashedInt32"
+  },
+  "plugins": [
+    {
+      "name": "jev",
+      "source": "./",
+      "displayName": "TypeSafe Jev",
+      "description": "Typed, calibrated judgments from TypeSafe Jev: classify, score, check, a batched multi-question ask, and model discovery.",
+      "version": "0.3.0",
+      "homepage": "https://github.com/rashedInt32/jev-mcp",
+      "repository": "https://github.com/rashedInt32/jev-mcp",
+      "license": "MIT",
+      "keywords": [
+        "mcp",
+        "typesafe",
+        "jev",
+        "system-one",
+        "classification",
+        "confidence"
+      ],
+      "category": "productivity"
+    }
+  ]
+}
