@@ -20,12 +20,14 @@ export async function startMock() {
   const requests = [];
   // `answers`, when set, replaces the generated answers verbatim, so a test
   // can hand the server a malformed response and prove it is rejected.
-  const state = { confidence: 0.9, noul: 0.5, status: 200, body: null, answers: null };
+  // `delayMs` holds each response so a test can observe how many requests are
+  // in flight at once; `maxInFlight` records the peak.
+  const state = { confidence: 0.9, noul: 0.5, status: 200, body: null, answers: null, delayMs: 0, inFlight: 0, maxInFlight: 0 };
 
   const server = createServer((req, res) => {
     let raw = "";
     req.on("data", (d) => (raw += d));
-    req.on("end", () => {
+    req.on("end", async () => {
       let parsed;
       try {
         parsed = JSON.parse(raw || "{}");
@@ -33,6 +35,10 @@ export async function startMock() {
         parsed = raw;
       }
       requests.push({ url: req.url, body: parsed });
+      state.inFlight += 1;
+      state.maxInFlight = Math.max(state.maxInFlight, state.inFlight);
+      if (state.delayMs > 0) await new Promise((r) => setTimeout(r, state.delayMs));
+      state.inFlight -= 1;
 
       res.setHeader("content-type", "application/json");
       res.setHeader("x-typesafe-request-id", "req_test_123");

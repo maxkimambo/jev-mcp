@@ -92,6 +92,7 @@ missing-key error. Leaving `env` out keeps all three key sources live.
 | `jev_score` | Score | The answer is a degree on an ordered scale |
 | `jev_check` | Noul | The answer is yes or no, and you want the probability |
 | `jev_ask` | all three | You have several questions about the same state |
+| `jev_triage` | all three, per item | You have many items and want one result each, with files read server-side |
 | `jev_models` | — | Confirm the key works and find a model id |
 
 Every tool returns the full probability distribution alongside the answer, plus
@@ -108,6 +109,58 @@ than one call per question, with no change in the answers.
 
 Questions in one request cannot see each other's answers. State any speculative
 premise explicitly and let your own code decide which answers apply.
+
+### Triage many items without reading them
+
+`jev_triage` asks one question set about many items in a single call and returns one
+result per item, in input order. An item is either `text` you already hold or a
+`path` the server reads itself. File contents go to Jev and never enter the agent's
+context; the agent sees only the answers. That is what makes triage cheap: screen
+forty files, then open the three that matter.
+
+```json
+{
+  "query": "Find where retry backoff for the payments client is configured",
+  "items": [
+    { "id": "client", "path": "src/payments/client.ts" },
+    { "id": "config", "path": "src/config/http.ts" },
+    { "id": "notes", "text": "Backoff was moved to the shared HTTP layer in March." }
+  ]
+}
+```
+
+`query` is shorthand for one check named `relevant`. Replace it with `questions` for
+typed judgments; the shape is the same as `jev_ask`. Each item is its own request,
+so `jev_ask`'s batching applies per item: ask everything you need in one pass.
+
+Each result carries either `answers` or an `error`; a bad path or a rate-limited
+item fails in place and the rest still return. Check answers carry a `verdict`,
+choice and score answers an `action`. The call is an error only when every item
+failed. `usage` is summed over the items that succeeded.
+
+File reads are confined:
+
+- A path must sit **below an allowed root**. The default root is the directory the
+  server was started in; set `JEV_FILE_ROOTS` to a `path.delimiter`-separated list
+  of absolute directories, or to `off` to refuse every `path` item. Relative paths
+  resolve against the first root. Containment is checked before and after symlinks
+  are resolved, so a link cannot walk out.
+- **Credential files are refused** by name wherever they sit: `.env*`, `.ssh`,
+  `.aws`, `.gnupg`, `*.pem`, `*.key`, `id_rsa`, `credentials.json`, the server's own
+  key file, and similar. This closes the obvious channel for an injected instruction
+  to ship a secret to the API.
+- Only regular text files are read. Binary, directories, and files above
+  `JEV_MAX_STATE_CHARS` fail with a reason. Nothing is truncated.
+- No error message ever includes file contents.
+
+Paths arrive from the model, and the model can be steered by text it has read, so
+they are treated as untrusted. The result reports `file_roots` so you can see what
+the server will and will not touch.
+
+The idea of screening files inside the tool so the agent reads only what matters
+comes from Kush Bhuwalka's [jev-sift](https://github.com/kbhuw/jev-sift). This
+implementation shares that goal and adds root confinement with a credential deny
+list, per-item classified errors, confidence gating, and answer validation.
 
 ## Design rules
 
@@ -158,7 +211,8 @@ Failures come back with `isError` and a classified body: `kind`, `retryable`, an
 where available `status`, `requestId`, and a `hint`. A rejected key (`authentication`,
 never retryable) is distinguishable from a rate limit (`rate_limit`, retryable) and
 from a malformed question (`invalid_request`) and from an answer that fails validation
-against the question (`malformed_response`, retryable, nothing to act on). The SDK
+against the question (`malformed_response`, retryable, nothing to act on) and from a
+`path` item that cannot be read (`file_access`, never retryable). The SDK
 already retries 408, 429, and 5xx with backoff before an error surfaces here.
 
 Every judgment result also carries `latency_ms` for the API round trip, so calibration
@@ -192,8 +246,12 @@ Point your client at the directory, or copy the file to `~/.claude/skills/jev/`.
 | `TYPESAFE_API_KEY` | Required. `JEV_API_KEY` also works. |
 | `JEV_MODEL` | Model id. Defaults to `jev-latest`. |
 | `JEV_TIMEOUT_MS` | Per-attempt timeout. Defaults to 15000. |
-| `JEV_MAX_QUESTIONS` | Questions per `jev_ask`. Defaults to 64. |
-| `JEV_MAX_STATE_CHARS` | Largest state accepted. Defaults to 200000. |
+| `JEV_MAX_QUESTIONS` | Questions per `jev_ask` or `jev_triage`. Defaults to 64. |
+| `JEV_MAX_STATE_CHARS` | Largest state accepted, per item for `jev_triage`. Defaults to 200000. |
+| `JEV_MAX_ITEMS` | Items per `jev_triage` call. Defaults to 50. |
+| `JEV_CONCURRENCY` | Parallel requests within one `jev_triage` call. Defaults to 4, capped at 16. |
+| `JEV_FILE_ROOTS` | Directories `jev_triage` may read below. Defaults to the working directory; `off` disables file reads. |
+| `JEV_KEY_FILE` | Key file path. Defaults to `~/.config/typesafe/key`. Always refused as a `path` item. |
 | `TYPESAFE_LOG_LEVEL` | SDK verbosity. Safe at any level; all output goes to stderr. |
 
 An unusable value for any numeric setting falls back to the default and warns on

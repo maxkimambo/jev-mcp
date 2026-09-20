@@ -13,12 +13,15 @@ import {
   APIUserAbortError,
   AuthenticationError,
   BadRequestError,
+  choice,
   NotFoundError,
+  noul,
   PermissionDeniedError,
   RateLimitError,
+  score,
   UnprocessableEntityError,
 } from "@typesafe-ai/sdk";
-import type { EntryType } from "@typesafe-ai/sdk";
+import type { EntryType, Question, ScoreCriteria } from "@typesafe-ai/sdk";
 
 // ── Limits ──────────────────────────────────────────────────────────────────
 
@@ -36,6 +39,15 @@ export const DEFAULT_MAX_SCORE_LEVELS = 255;
 export const DEFAULT_MAX_QUESTIONS = 64;
 export const DEFAULT_MAX_STATE_CHARS = 200_000;
 export const DEFAULT_TIMEOUT_MS = 15_000;
+
+/**
+ * Caps for `jev_triage`, which fans one question set out over many items. Each
+ * item is its own API request, so items × concurrency is the blast radius of a
+ * single call. Both are configurable; concurrency is also hard-capped.
+ */
+export const DEFAULT_MAX_ITEMS = 50;
+export const DEFAULT_CONCURRENCY = 4;
+export const MAX_CONCURRENCY = 16;
 
 // ── Environment parsing ─────────────────────────────────────────────────────
 
@@ -208,6 +220,7 @@ export type ErrorKind =
   | "cancelled"
   | "invalid_arguments"
   | "malformed_response"
+  | "file_access"
   | "unknown";
 
 export interface DescribedError {
@@ -240,7 +253,10 @@ export function describeError(error: unknown): DescribedError {
       hint: "The API returned an answer that does not match the question sent. Nothing here should be acted on. Retry once; if it persists, report it with the model id.",
     };
   }
-  if (error instanceof APIUserAbortError) {
+  if (error instanceof FileAccessError) {
+    return { kind: "file_access", message, retryable: false, hint: error.hint };
+  }
+  if (error instanceof APIUserAbortError || (error instanceof Error && error.name === "AbortError")) {
     return { kind: "cancelled", message, retryable: false, hint: "The client cancelled the request." };
   }
   if (error instanceof APITimeoutError) {
@@ -298,6 +314,129 @@ export class MalformedResponseError extends Error {
     super(message);
     this.name = "MalformedResponseError";
   }
+}
+
+/**
+ * Thrown when a `path` item cannot be read: outside the allowed roots, a
+ * credential file, a directory, binary, oversized, or missing. Never retryable.
+ * The message never includes file contents.
+ */
+export class FileAccessError extends Error {
+  readonly hint: string;
+  constructor(message: string, hint: string) {
+    super(message);
+    this.name = "FileAccessError";
+    this.hint = hint;
+  }
+}
+
+// ── Question sets ───────────────────────────────────────────────────────────
+//
+// `jev_ask` and `jev_triage` accept the same list of typed questions. Building
+// the SDK questions and checking the answers that come back live here so both
+// tools enforce identical rules, and so a triage over fifty items is exactly
+// fifty asks.
+
+export interface QuestionSpec {
+  id: string;
+  type: "classify" | "score" | "check";
+  question: EntryType;
+  options?: Record<string, EntryType>;
+  add_none?: boolean;
+  levels?: EntryType[];
+  yes_means?: EntryType;
+  no_means?: EntryType;
+}
+
+/** What each answer must be checked against once it comes back. */
+export type ExpectedAnswer = { type: "classify"; keys: string[] } | { type: "score"; levels: number } | { type: "check" };
+
+export interface BuiltQuestionSet {
+  built: Record<string, Question>;
+  /** For each 'classify' question, the key carrying the no-match meaning, or null. */
+  noneOptions: Record<string, string | null>;
+  expected: Record<string, ExpectedAnswer>;
+}
+
+/**
+ * Turn caller question specs into SDK questions.
+ *
+ * @throws on too many questions, duplicate ids, a classify without options, a
+ *         score without levels, or an oversized option or level set.
+ */
+export function buildQuestionSet(questions: readonly QuestionSpec[], maxQuestions: number): BuiltQuestionSet {
+  if (questions.length > maxQuestions) {
+    throw new Error(`questions must contain at most ${maxQuestions} entries; received ${questions.length}. Raise JEV_MAX_QUESTIONS if that limit is wrong for your workload.`);
+  }
+  assertUniqueIds(questions.map((q) => q.id));
+
+  const built: Record<string, Question> = {};
+  const noneOptions: Record<string, string | null> = {};
+  const expected: Record<string, ExpectedAnswer> = {};
+
+  for (const q of questions) {
+    if (q.type === "classify") {
+      if (!q.options) throw new Error(`Question '${q.id}' is type 'classify' and needs options.`);
+      const { criteria, noneKey } = buildChoiceCriteria(q.options, q.add_none !== false, `options for '${q.id}'`);
+      built[q.id] = choice(q.question, criteria);
+      noneOptions[q.id] = noneKey;
+      expected[q.id] = { type: "classify", keys: Object.keys(criteria) };
+    } else if (q.type === "score") {
+      if (!q.levels) throw new Error(`Question '${q.id}' is type 'score' and needs levels.`);
+      if (q.levels.length < 2) throw new Error(`levels for '${q.id}' must contain at least two entries.`);
+      if (q.levels.length > DEFAULT_MAX_SCORE_LEVELS) {
+        throw new Error(`levels for '${q.id}' must contain at most ${DEFAULT_MAX_SCORE_LEVELS} entries.`);
+      }
+      // Length is checked above; the SDK types the rubric as a tuple.
+      built[q.id] = score(q.question, q.levels as unknown as ScoreCriteria);
+      expected[q.id] = { type: "score", levels: q.levels.length };
+    } else {
+      const criteria =
+        q.yes_means !== undefined || q.no_means !== undefined
+          ? { true: q.yes_means ?? null, false: q.no_means ?? null }
+          : undefined;
+      built[q.id] = criteria ? noul(q.question, criteria) : noul(q.question);
+      expected[q.id] = { type: "check" };
+    }
+  }
+  return { built, noneOptions, expected };
+}
+
+export interface AnswerGates {
+  actAbove: number;
+  reviewAbove: number;
+  /** When both are set, 'check' answers also carry a verdict. */
+  yesAtOrAbove?: number;
+  noAtOrBelow?: number;
+}
+
+/**
+ * Check every answer against the question it was sent for, then attach the
+ * confidence gate or verdict.
+ *
+ * A missing answer is an error, not a silently absent key, so a caller never
+ * acts on a partial set.
+ *
+ * @throws MalformedResponseError on any answer that does not match its question.
+ */
+export function checkAnswerSet(raw: unknown, expected: Record<string, ExpectedAnswer>, gates: AnswerGates): Record<string, unknown> {
+  const answersIn = (typeof raw === "object" && raw !== null ? raw : {}) as Record<string, Record<string, unknown> | undefined>;
+  const answers: Record<string, unknown> = {};
+  for (const [id, want] of Object.entries(expected)) {
+    const answer = answersIn[id];
+    if (want.type === "classify") validateChoiceAnswer(answer, want.keys, id);
+    else if (want.type === "score") validateScoreAnswer(answer, want.levels, id);
+    else validateNoulAnswer(answer, id);
+
+    if (want.type === "check" && gates.yesAtOrAbove !== undefined && gates.noAtOrBelow !== undefined) {
+      answers[id] = { ...answer, verdict: gateProbability(answer!.noul as number, gates.yesAtOrAbove, gates.noAtOrBelow) };
+    } else if (typeof answer?.confidence === "number") {
+      answers[id] = { ...answer, action: gateConfidence(answer.confidence, gates.actAbove, gates.reviewAbove) };
+    } else {
+      answers[id] = answer;
+    }
+  }
+  return answers;
 }
 
 /** Probabilities may drift a little in serialization; more than this is a bug. */
