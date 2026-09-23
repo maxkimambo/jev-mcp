@@ -13,7 +13,7 @@
     "url": "https://github.com/rashedInt32/jev-mcp/issues"
   },
   "bin": {
-    "jev-mcp": "./dist/index.js"
+    "jev-mcp": "dist/index.js"
   },
   "files": [
     "dist",
