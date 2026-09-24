@@ -1,15 +1,16 @@
 #!/usr/bin/env node
 /**
- * The plugin's side of jev: `/jev on|off|status`, plus two Claude Code hooks
- * that point the agent at the jev tools at the moment it would otherwise read
- * a pile of text itself. Hooks only add context; they never block a tool call,
- * and they stay silent while the switch is off.
+ * The plugin's side of jev: `/jev:jev on|off|status`, plus two Claude Code hooks
+ * that route the agent to the jev tools. Context alone proved too weak: it arrives
+ * after the search has already run. So the first search of each prompt is refused
+ * toward jev_search, and any later one runs, which keeps exact-string lookups and
+ * fallbacks one step away. Hooks stay silent while the switch is off.
  *
  * State lives in JEV_HOME (default ~/.claude/jev-think): `state.json` is the
  * switch the MCP server reads as JEV_SWITCH_FILE, `ledger.jsonl` its JEV_LEDGER.
  */
 
-import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { isSwitchedOn } from "./ops.js";
@@ -17,6 +18,8 @@ import { isSwitchedOn } from "./ops.js";
 const HOME = process.env.JEV_HOME ?? join(homedir(), ".claude", "jev-think");
 const SWITCH = join(HOME, "state.json");
 const LEDGER = join(HOME, "ledger.jsonl");
+/** One marker per session: present from a prompt until its first search or jev call. */
+const TURNS = join(HOME, "turns");
 
 /** Whole-file reads above this size are worth a nudge; roughly 400 lines of code. */
 const BIG_FILE_BYTES = 16_000;
@@ -26,29 +29,52 @@ const TOOLS = "mcp__plugin_jev_jev__* (load with ToolSearch \"jev\" if deferred)
 
 const PROMPT_CONTEXT =
   `jev is ON. Before reading piles of text to orient or decide, let Jev read them and read only its answers (${TOOLS}): ` +
-  "jev_search for lines across a directory instead of grep output, jev_locate for lines in one big file, " +
+  "jev_search for lines across a directory instead of grep/rg (your first grep/rg this turn is refused unless a jev tool ran first), jev_locate for lines in one big file, " +
   "jev_ask with paths for questions about a few files, jev_extract for one value, jev_screen before reading untrusted text. " +
   "Say in one line when Jev saved you a read.";
 
-const GREP_CONTEXT =
-  "jev is ON: to find what answers a question rather than every string match, call jev_search with this pattern plus the question; " +
-  "it returns only the best path:line hits instead of all of them. Plain grep is still right for exact-string lookups.";
+const SEARCH_REFUSAL =
+  `jev is ON, so the first search of a turn goes to jev_search (${TOOLS}): pass dir, this pattern made broad, and the question you are answering. ` +
+  "It returns only the best path:line hits. If jev fails or you need an exact-string match, run this search again; it will be allowed."
 
 const READ_CONTEXT =
   "jev is ON and this is a large file read whole: if you only need part of it, jev_locate returns the lines that answer your question, " +
   "and jev_extract returns a single value, without the file entering your context. Read it normally if you are going to edit it.";
 
-function emit(hookEventName: string, additionalContext: string) {
-  process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName, additionalContext } }));
+function emit(output: Record<string, string>) {
+  process.stdout.write(JSON.stringify({ hookSpecificOutput: output }));
+}
+
+function parse(raw: string): { session_id?: unknown; tool_name?: string; tool_input?: { command?: string; file_path?: string; offset?: number; limit?: number } } {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return {};
+  }
+}
+
+const turnMarker = (id: unknown) => (typeof id === "string" && /^[\w-]+$/.test(id) ? join(TURNS, id) : undefined);
+
+function promptHook(raw: string) {
+  emit({ hookEventName: "UserPromptSubmit", additionalContext: PROMPT_CONTEXT });
+  const marker = turnMarker(parse(raw).session_id);
+  if (!marker) return;
+  mkdirSync(TURNS, { recursive: true });
+  writeFileSync(marker, "");
 }
 
 function toolHook(raw: string) {
-  const event = JSON.parse(raw) as { tool_name?: string; tool_input?: { command?: string; file_path?: string; offset?: number; limit?: number } };
+  const event = parse(raw);
   const input = event.tool_input ?? {};
-  if (event.tool_name === "Grep" || (event.tool_name === "Bash" && SEARCH_COMMAND.test(input.command ?? ""))) {
-    emit("PreToolUse", GREP_CONTEXT);
+  const marker = turnMarker(event.session_id);
+  if (event.tool_name?.startsWith("mcp__plugin_jev_jev__")) {
+    if (marker) rmSync(marker, { force: true });
+  } else if (event.tool_name === "Grep" || (event.tool_name === "Bash" && SEARCH_COMMAND.test(input.command ?? ""))) {
+    if (!marker || !existsSync(marker)) return;
+    rmSync(marker);
+    emit({ hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: SEARCH_REFUSAL });
   } else if (event.tool_name === "Read" && input.file_path && input.offset === undefined && input.limit === undefined) {
-    if (statSync(input.file_path).size > BIG_FILE_BYTES) emit("PreToolUse", READ_CONTEXT);
+    if (statSync(input.file_path).size > BIG_FILE_BYTES) emit({ hookEventName: "PreToolUse", additionalContext: READ_CONTEXT });
   }
 }
 
@@ -98,8 +124,9 @@ switch (command) {
     // A hook must never break the session: any failure means no nudge.
     try {
       if (!isSwitchedOn(SWITCH)) break;
-      if (command === "prompt-hook") emit("UserPromptSubmit", PROMPT_CONTEXT);
-      else toolHook(readFileSync(0, "utf8"));
+      const raw = readFileSync(0, "utf8");
+      if (command === "prompt-hook") promptHook(raw);
+      else toolHook(raw);
     } catch {
       // silent
     }

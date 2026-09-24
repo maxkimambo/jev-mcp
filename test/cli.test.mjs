@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -66,26 +66,53 @@ test("the prompt hook is silent while off and names the tools while on", () => {
   for (const tool of ["jev_search", "jev_locate", "jev_ask", "jev_extract", "jev_screen"]) assert.match(out.additionalContext, new RegExp(tool));
 });
 
-test("the tool hook nudges greps and big whole-file reads, and never blocks", () => {
+test("the first search after a prompt is refused toward jev_search, the next one runs", () => {
+  const h = home();
+  const session = "3f2a-session";
+  const grep = { session_id: session, tool_name: "Grep", tool_input: { pattern: "retry" } };
+  const bashRg = { session_id: session, tool_name: "Bash", tool_input: { command: "cd src && rg -n retry | head" } };
+
+  hook(h, "prompt-hook", { session_id: session });
+  assert.equal(hook(h, "tool-hook", grep), undefined, "silent while off");
+
+  run(h, ["on"]);
+  for (const first of [grep, bashRg]) {
+    hook(h, "prompt-hook", { session_id: session });
+    const out = hook(h, "tool-hook", first);
+    assert.equal(out.permissionDecision, "deny");
+    assert.match(out.permissionDecisionReason, /jev_search/);
+    assert.equal(hook(h, "tool-hook", first), undefined, "a second search in the same turn runs untouched");
+  }
+});
+
+test("a jev call before searching lifts the refusal, and a session id never leaves JEV_HOME", () => {
+  const h = home();
+  run(h, ["on"]);
+  const session = "abc";
+  hook(h, "prompt-hook", { session_id: session });
+  hook(h, "tool-hook", { session_id: session, tool_name: "mcp__plugin_jev_jev__jev_search", tool_input: {} });
+  assert.equal(hook(h, "tool-hook", { session_id: session, tool_name: "Grep", tool_input: {} }), undefined);
+
+  for (const bad of [undefined, "../../escape"]) {
+    hook(h, "prompt-hook", { session_id: bad });
+    assert.equal(hook(h, "tool-hook", { session_id: bad, tool_name: "Grep", tool_input: {} }), undefined, String(bad));
+  }
+  assert.ok(!existsSync(join(h, "..", "..", "escape")));
+});
+
+test("the tool hook nudges big whole-file reads and leaves other tools alone", () => {
   const h = home();
   const big = join(h, "big.log");
   writeFileSync(big, "x\n".repeat(20_000));
   const small = join(h, "small.md");
   writeFileSync(small, "tiny");
-
-  const grep = { tool_name: "Grep", tool_input: { pattern: "retry" } };
-  const bashRg = { tool_name: "Bash", tool_input: { command: "cd src && rg -n retry" } };
   const bigRead = { tool_name: "Read", tool_input: { file_path: big } };
-  assert.equal(hook(h, "tool-hook", grep), undefined, "silent while off");
+  assert.equal(hook(h, "tool-hook", bigRead), undefined, "silent while off");
 
   run(h, ["on"]);
-  for (const event of [grep, bashRg]) {
-    const out = hook(h, "tool-hook", event);
-    assert.equal(out.hookEventName, "PreToolUse");
-    assert.match(out.additionalContext, /jev_search/);
-    assert.equal(out.permissionDecision, undefined, "a nudge, never a decision");
-  }
-  assert.match(hook(h, "tool-hook", bigRead).additionalContext, /jev_locate/);
+  const out = hook(h, "tool-hook", bigRead);
+  assert.match(out.additionalContext, /jev_locate/);
+  assert.equal(out.permissionDecision, undefined, "a read is nudged, never refused");
 
   for (const quiet of [
     { tool_name: "Read", tool_input: { file_path: small } },
@@ -103,4 +130,5 @@ test("hooks survive garbage input silently", () => {
   run(h, ["on"]);
   assert.equal(run(h, ["tool-hook"], "not json").trim(), "");
   assert.equal(run(h, ["prompt-hook"], "").trim().length > 0, true, "the prompt hook does not need its input");
+  assert.equal(run(h, ["prompt-hook"], "not json").trim().length > 0, true);
 });
