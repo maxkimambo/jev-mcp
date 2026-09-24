@@ -55,7 +55,7 @@ export function isWithinRoot(root: string, target: string): boolean {
  * API, not to classify every file on disk.
  */
 const DENIED_DIRS = new Set([".ssh", ".gnupg", ".aws", ".azure", ".kube", ".docker", ".gcloud", ".password-store"]);
-const DENIED_CONFIG_DIRS = new Set(["typesafe", "gh", "hub", "op", "1password", "gcloud"]);
+const DENIED_CONFIG_DIRS = new Set(["jev", "typesafe", "gh", "hub", "op", "1password", "gcloud"]);
 const DENIED_FILES = [
   /^\.env(\..+)?$/,
   /^\.(netrc|npmrc|pypirc|htpasswd|git-credentials|pgpass|my\.cnf)$/,

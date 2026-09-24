@@ -111,7 +111,7 @@ export async function startMock() {
 export async function withClient({ baseUrl, withKey = true, env = {} } = {}, fn) {
   // Pin the key-file fallback at a path that cannot exist. HOME is passed
   // through, so without this the suite would start reading a real
-  // ~/.config/typesafe/key the moment one exists, and the missing-key test
+  // ~/.config/jev/api_key the moment one exists, and the missing-key test
   // would quietly begin making live calls instead of exercising the failure
   // path. A test that needs the fallback passes JEV_KEY_FILE explicitly.
   const childEnv = {
@@ -120,6 +120,8 @@ export async function withClient({ baseUrl, withKey = true, env = {} } = {}, fn)
     JEV_KEY_FILE: "/nonexistent/jev-mcp-test/key",
     ...env,
   };
+  // An env entry set to undefined unsets it, e.g. to exercise the default key path.
+  for (const name of Object.keys(childEnv)) if (childEnv[name] === undefined) delete childEnv[name];
   if (baseUrl) childEnv.TYPESAFE_BASE_URL = baseUrl;
   if (withKey) childEnv[KEY_VAR] = "value-for-the-local-stand-in";
 

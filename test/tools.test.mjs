@@ -86,6 +86,75 @@ test("falls back to a key file when the environment carries no key", async () =>
   }
 });
 
+test("the default key file is $XDG_CONFIG_HOME/jev/api_key", async () => {
+  const { mkdirSync, mkdtempSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+
+  const config = mkdtempSync(join(tmpdir(), "jev-xdg-"));
+  mkdirSync(join(config, "jev"), { mode: 0o700 });
+  writeFileSync(join(config, "jev", "api_key"), "value-for-the-local-stand-in\n", { mode: 0o600 });
+
+  const mock = await startMock();
+  try {
+    await withClient({ baseUrl: mock.url, withKey: false, env: { JEV_KEY_FILE: undefined, XDG_CONFIG_HOME: config } }, async (client) => {
+      const result = await client.callTool({ name: "jev_check", arguments: { state: "s", question: "q" } });
+      assert.notEqual(result.isError, true, JSON.stringify(result.content));
+      assert.equal(mock.requests.length, 1);
+    });
+  } finally {
+    await mock.close();
+  }
+});
+
+test("a key file readable by group or others is refused, like ssh does", async () => {
+  const { mkdtempSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+
+  const keyFile = join(mkdtempSync(join(tmpdir(), "jev-key-")), "api_key");
+  writeFileSync(keyFile, "value-for-the-local-stand-in\n", { mode: 0o644 });
+
+  const mock = await startMock();
+  try {
+    await withClient({ baseUrl: mock.url, withKey: false, env: { JEV_KEY_FILE: keyFile } }, async (client) => {
+      const result = await client.callTool({ name: "jev_check", arguments: { state: "s", question: "q" } });
+      assert.equal(result.isError, true);
+      assert.match(payload(result).error.message, /chmod 600/);
+      assert.ok(!JSON.stringify(result).includes("value-for-the-local-stand-in"), "the key never reaches a result");
+      assert.equal(mock.requests.length, 0);
+    });
+  } finally {
+    await mock.close();
+  }
+});
+
+test("a key file holding anything but one key is refused before any request", async () => {
+  // A doubled paste with a stray ESC between the copies reached fetch as a
+  // header value and surfaced only as "fetch failed".
+  const { mkdtempSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+
+  const dir = mkdtempSync(join(tmpdir(), "jev-key-"));
+  const mock = await startMock();
+  try {
+    for (const [name, contents] of [["esc", "sk-or-abc\x1bsk-or-abc"], ["two-lines", "sk-or-abc\nsk-or-abc\n"], ["assignment", "KEY = sk-or-abc"]]) {
+      const keyFile = join(dir, name);
+      writeFileSync(keyFile, contents, { mode: 0o600 });
+      await withClient({ baseUrl: mock.url, withKey: false, env: { JEV_KEY_FILE: keyFile } }, async (client) => {
+        const result = await client.callTool({ name: "jev_check", arguments: { state: "s", question: "q" } });
+        assert.equal(result.isError, true, name);
+        assert.match(payload(result).error.message, /only the key/, name);
+        assert.ok(!JSON.stringify(result).includes("sk-or-abc"), "the key never reaches a result");
+      });
+    }
+    assert.equal(mock.requests.length, 0);
+  } finally {
+    await mock.close();
+  }
+});
+
 // ── Regressions confirmed on the wire ───────────────────────────────────────
 
 test("regression: an option the caller names 'none' is never overwritten", async () => {

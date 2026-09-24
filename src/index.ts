@@ -29,7 +29,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { choice, noul, score, TypeSafeClient } from "@typesafe-ai/sdk";
 import type { EntryType, ScoreCriteria } from "@typesafe-ai/sdk";
 import { z } from "zod";
-import { readFileSync, realpathSync } from "node:fs";
+import { readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { isDeniedPath, parseRoots, readTextFile, resolveSearchDir } from "./files.js";
@@ -185,17 +185,31 @@ let provider: Provider | undefined;
  * shell profile.
  *
  * A 0600 file reaches every spawn path while keeping the secret out of
- * `~/.claude.json`, out of argv, and out of any repository.
+ * `~/.claude.json`, out of argv, and out of any repository. As with ssh, a file
+ * that someone else owns or others can read is refused rather than used.
  */
-const KEY_FILE = process.env.JEV_KEY_FILE ?? join(homedir(), ".config", "typesafe", "key");
+const KEY_FILE =
+  process.env.JEV_KEY_FILE ?? join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "jev", "api_key");
 
-function readKeyFile(): string | undefined {
+/** The key, the reason the file cannot be used, or undefined when there is none. */
+function readKeyFile(): string | Error | undefined {
+  let stat;
   try {
-    const contents = readFileSync(KEY_FILE, "utf8").trim();
-    return contents.length > 0 ? contents : undefined;
+    stat = statSync(KEY_FILE);
   } catch {
     return undefined;
   }
+  const loose = process.platform !== "win32" && ((stat.mode & 0o077) !== 0 || stat.uid !== process.getuid?.());
+  if (loose) return new Error(`${KEY_FILE} must be owned by you and readable only by you: chmod 600 ${KEY_FILE}`);
+  let key;
+  try {
+    key = readFileSync(KEY_FILE, "utf8").trim();
+  } catch (err) {
+    return new Error(`${KEY_FILE} could not be read: ${(err as Error).message}`);
+  }
+  // Anything else would reach fetch as a header value and fail as "fetch failed".
+  if (/[^\x21-\x7e]/.test(key)) return new Error(`${KEY_FILE} must hold only the key: no spaces, line breaks or control characters.`);
+  return key || undefined;
 }
 
 /**
@@ -222,9 +236,10 @@ const findKey = () => process.env.TYPESAFE_API_KEY ?? process.env.JEV_API_KEY ??
 
 function getClient(): TypeSafeClient {
   const apiKey = findKey();
+  if (apiKey instanceof Error) throw apiKey;
   if (!apiKey) {
     throw new Error(
-      `No API key. Set TYPESAFE_API_KEY (or OPENROUTER_API_KEY) in the environment of the MCP client, or create ${KEY_FILE} with mode 0600. Never pass it as a tool argument.`,
+      `No API key. Put a TypeSafe or OpenRouter key in ${KEY_FILE} with mode 0600, or set TYPESAFE_API_KEY (or OPENROUTER_API_KEY) in the MCP client's environment. Never pass it as a tool argument.`,
     );
   }
   if (!client) {
@@ -241,7 +256,10 @@ function getClient(): TypeSafeClient {
 }
 
 /** The model requests go to: fixed once a client exists, else what the current key implies. */
-const model = () => (provider ?? resolveProvider(findKey(), process.env)).model;
+const model = () => {
+  const key = findKey();
+  return (provider ?? resolveProvider(typeof key === "string" ? key : undefined, process.env)).model;
+};
 
 // ── Result helpers ──────────────────────────────────────────────────────────
 
