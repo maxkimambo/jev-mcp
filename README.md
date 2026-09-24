@@ -23,21 +23,26 @@ claude plugin marketplace add /path/to/jev-mcp
 claude plugin install jev@jev-mcp
 ```
 
-Then, in a session, `/jev on`. The tools are **off by default**: while off, every tool
-refuses and sends nothing. `/jev off` switches back, `/jev status` shows calls, tokens,
+Then, in a session, `/jev:jev on`. The tools are **off by default**: while off, every tool
+refuses and sends nothing. `/jev:jev off` switches back, `/jev:jev status` shows calls, tokens,
 cost and latency by tool.
 
 Besides the server and the skill, the plugin adds two hooks that only fire while jev is
-on and never block anything:
+on:
 
 - `UserPromptSubmit` reminds the agent which jev tool replaces which read.
-- `PreToolUse` on `Grep`, `rg`/`grep` in `Bash`, and whole-file `Read`s over 16 kB adds a
-  one-line pointer to `jev_search` or `jev_locate` at the moment it matters.
+- `PreToolUse` refuses the **first** `Grep`, or `rg`/`grep` in `Bash`, after each prompt
+  and tells the agent to use `jev_search` instead. A later search in the same turn runs,
+  so an exact-string lookup or a fallback when Jev fails costs one retry. Calling any
+  jev tool first lifts the refusal. Hints alone did not work: they arrive after the
+  search has already run. Whole-file `Read`s over 16 kB get a hint pointing to
+  `jev_locate`, never a refusal.
 
 Switch and ledger live in `~/.claude/jev-think/` (`JEV_HOME` overrides it), shared
 between the `/jev` command and the server through `JEV_SWITCH_FILE` and `JEV_LEDGER`.
-Installed from a directory, the server runs from the checkout's `dist/`, so a rebuild
-takes effect in the next session.
+Claude Code runs a copy made at install time (`~/.claude/plugins/cache/`), so after
+`make build` bump the version and reinstall, or the old build keeps running. The command
+is `/jev:jev on|off|status`; plugin commands are always prefixed with the plugin name.
 
 ### Any MCP client
 
@@ -60,26 +65,29 @@ Do not register the server directly **and** install the plugin. Two servers name
 
 ### The key
 
-The server reads the key from `TYPESAFE_API_KEY` in its environment, then from
-`JEV_API_KEY`, then `OPENROUTER_API_KEY`, then from `~/.config/typesafe/key`.
+A TypeSafe key (`ts_…`) or an [OpenRouter](https://openrouter.ai/~typesafe/jev-latest)
+key (`sk-or-…`) works. An OpenRouter key is routed to `https://openrouter.ai/api` with
+model `~typesafe/jev-latest`; `TYPESAFE_BASE_URL` and `JEV_MODEL` override both. The key
+is never a tool argument, so it cannot land in a transcript or a model's context.
 
-An [OpenRouter](https://openrouter.ai/~typesafe/jev-latest) key works too. A key
-starting with `sk-or-` is routed to `https://openrouter.ai/api` with model
-`~typesafe/jev-latest`; `TYPESAFE_BASE_URL` and `JEV_MODEL` still override both. It is never a tool argument, so it
-cannot land in a transcript or in a model's context.
+The server reads `TYPESAFE_API_KEY`, then `JEV_API_KEY`, then `OPENROUTER_API_KEY` from
+its environment, then the key file `$XDG_CONFIG_HOME/jev/api_key` (by default
+`~/.config/jev/api_key`; `JEV_KEY_FILE` overrides the path).
 
-The key file is the most reliable source, because some MCP clients strip the
-environment before spawning servers:
+Prefer the file. An MCP server gets its client's environment, not your shell's, so a
+key exported from a shell profile usually never arrives. Create it without the key
+touching your shell history or another process's argv, and with 0600 from the start:
 
 ```sh
-mkdir -p ~/.config/typesafe
-printf '%s' "ts_..." > ~/.config/typesafe/key
-chmod 600 ~/.config/typesafe/key
+mkdir -p -m 700 ~/.config/jev
+(umask 077 && read -rs key && printf '%s' "$key" > ~/.config/jev/api_key)
 ```
 
-If you prefer the variable, put it in `~/.zshenv` rather than in any repo, and make
-sure it is **exported**. Without `export` the variable exists only in the shell that
-read it, and every server Claude Code spawns fails with a missing-key error.
+Paste the key at the silent prompt and press Enter. As with ssh, the server refuses a
+key file that someone else owns or that group or others can read, and says to
+`chmod 600` it. The tools also refuse to read anything under `~/.config/jev/` as a
+file, so the key cannot be sent to Jev by path. Rotate by overwriting the file; the
+next session picks it up.
 
 ### Plugin internals
 
@@ -99,7 +107,7 @@ inventory count, not a failure. Trust `claude mcp list` over `plugin details` he
 
 The plugin's `env` block sets only the switch and ledger paths, never the key. Naming
 the key there would expand to an empty string when the variable is unset, and an empty
-string is not nullish, so it would shadow the `~/.config/typesafe/key` fallback and turn
+string is not nullish, so it would shadow the key-file fallback and turn
 a working setup into a missing-key error. Claude Code does not usually export an
 OpenRouter key to plugin servers, so the key file is the dependable route.
 
@@ -265,7 +273,7 @@ truncating silently changes the material the judgment rests on.
 
 ## Agent skill
 
-`skills/jev/SKILL.md` teaches an agent to let Jev read bulk text and to read only the
+`skills/jev-tools/SKILL.md` teaches an agent to let Jev read bulk text and to read only the
 answer: which tool replaces which read, how to phrase the question, and how to act on
 `act`/`review`/`abstain`. Primitive semantics and state design live in TypeSafe's own
 `typesafe-ai` skill and in the docs.
@@ -286,7 +294,7 @@ answer: which tool replaces which read, how to phrase the question, and how to a
 | `JEV_CONCURRENCY` | Parallel requests within one `jev_triage` call. Defaults to 4, capped at 16. |
 | `JEV_FILE_ROOTS` | Directories `jev_triage`, `jev_ask` `paths` and `jev_locate` may read below. Defaults to the working directory; `off` disables file reads. |
 | `JEV_RG_PATH` | ripgrep binary for `jev_search`. Defaults to `rg` on PATH. |
-| `JEV_KEY_FILE` | Key file path. Defaults to `~/.config/typesafe/key`. Always refused as a `path` item. |
+| `JEV_KEY_FILE` | Key file path. Defaults to `$XDG_CONFIG_HOME/jev/api_key`, i.e. `~/.config/jev/api_key`. Must be 0600 and yours. Always refused as a `path` item. |
 | `TYPESAFE_LOG_LEVEL` | SDK verbosity. Safe at any level; all output goes to stderr. |
 
 An unusable value for any numeric setting falls back to the default and warns on
