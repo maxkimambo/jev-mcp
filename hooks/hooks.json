@@ -1,0 +1,19 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/cli.js\" prompt-hook", "timeout": 3 }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Grep|Read|Bash",
+        "hooks": [
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/cli.js\" tool-hook", "timeout": 3 }
+        ]
+      }
+    ]
+  }
+}
