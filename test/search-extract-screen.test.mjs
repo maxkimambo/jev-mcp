@@ -8,7 +8,6 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chunkText, countHiddenChars, extractCandidates, packBlocks } from "../dist/lib.js";
-import { walkFiles } from "../dist/files.js";
 import { payload, startMock, withClient } from "./helpers.mjs";
 
 function repo() {
@@ -23,22 +22,11 @@ function repo() {
   writeFileSync(join(root, ".git", "config"), "retry = 1");
   writeFileSync(join(root, ".env"), "RETRY_TOKEN=secret");
   writeFileSync(join(root, "blob.bin"), "a\0b retry");
+  writeFileSync(join(root, ".gitignore"), "node_modules/\n");
   return root;
 }
 
 // ── Pure helpers ────────────────────────────────────────────────────────────
-
-test("walkFiles lists regular files sorted, skipping vendored, VCS, and credential paths", async () => {
-  const root = repo();
-  const files = await walkFiles(".", { roots: [root] });
-  assert.deepEqual(files.map((f) => f.relative), ["README.md", "blob.bin", "src/http/client.ts", "src/main.ts"]);
-  assert.ok(files.every((f) => f.absolute.startsWith(root)));
-});
-
-test("walkFiles refuses a directory outside the roots", async () => {
-  const root = repo();
-  await assert.rejects(walkFiles("/etc", { roots: [root] }), /outside the allowed roots/);
-});
 
 test("packBlocks groups indices under both the size and the count cap, in order", () => {
   assert.deepEqual(packBlocks([10, 10, 10], 25), [[0, 1], [2]]);
@@ -87,14 +75,15 @@ test("jev_search greps server-side, sends candidates with context, and returns h
       assert.deepEqual(Object.keys(sent.questions.where.criteria), ["C0001", "C0002", "none"]);
       assert.match(sent.state, /C0001\| src\/http\/client.ts:2: const retries = 3;/);
       assert.match(sent.state, /import x from 'y';/, "a candidate carries its neighbouring lines");
-      assert.ok(!sent.state.includes("retry forever") && !sent.state.includes("RETRY_TOKEN"), "vendored and credential files are never read");
+      for (const never of ["retry forever", "RETRY_TOKEN", "retry = 1", "a\u0000b"]) {
+        assert.ok(!sent.state.includes(never), `ignored, hidden, credential and binary files are never sent: ${never}`);
+      }
 
       const body = payload(result);
       assert.deepEqual(body.hits[0], { path: "src/http/client.ts", line: 2, text: "const retries = 3;", probability: 0.9, window_found: 0.9 });
       assert.equal(body.found, "yes");
       assert.equal(body.candidates, 2);
-      assert.equal(body.files_scanned, 3);
-      assert.deepEqual(body.skipped, { file_access: 1 }, "the binary file is reported, not silently dropped");
+      assert.equal(body.files_matched, 2);
     });
   } finally {
     await mock.close();
@@ -256,6 +245,101 @@ test("windowed tools accept a file larger than one request, split into windows",
       assert.notEqual(result.isError, true, JSON.stringify(result.content));
       assert.ok(payload(result).windows > 1);
       assert.ok(mock.requests.every((r) => r.body.state.length <= 100), "each request stays within the per-request limit");
+    });
+  } finally {
+    await mock.close();
+  }
+});
+
+// ── Ignore files ────────────────────────────────────────────────────────────
+
+function ignoredRepo() {
+  const root = mkdtempSync(join(tmpdir(), "jev-ignore-"));
+  const put = (rel, body) => {
+    mkdirSync(join(root, rel, ".."), { recursive: true });
+    writeFileSync(join(root, rel), body);
+  };
+  put(".gitignore", "*.log\n/build-out/\n!keep.log\n");
+  put(".ignore", "secret-notes.md\n");
+  put("app.log", "IGNORED_MARK");
+  put("keep.log", "kept by negation");
+  put("build-out/x.ts", "IGNORED_MARK");
+  put("src/build-out/y.ts", "anchored pattern only applies at the root");
+  put("src/.gitignore", "gen/\n");
+  put("src/gen/z.ts", "IGNORED_MARK");
+  put("src/debug.log", "IGNORED_MARK");
+  put("src/main.ts", "main");
+  put("gen/w.ts", "a nested .gitignore does not reach its parent");
+  put("docs/secret-notes.md", "IGNORED_MARK");
+  put("docs/readme.md", "readme");
+  return root;
+}
+
+/** The files whose lines a search sent to Jev, from the candidate headers. */
+const sentPaths = (mock) => [...new Set(mock.requests.flatMap((r) => [...r.body.state.matchAll(/^C\d+\| ([^:]+):/gm)].map((m) => m[1])))].sort();
+
+test("jev_search honours .gitignore and .ignore, nested and negated, like git", async () => {
+  const root = ignoredRepo();
+  const mock = await startMock();
+  try {
+    await withClient({ baseUrl: mock.url, env: { JEV_FILE_ROOTS: root } }, async (client) => {
+      await client.callTool({ name: "jev_search", arguments: { question: "q" } });
+      assert.deepEqual(sentPaths(mock), ["docs/readme.md", "gen/w.ts", "keep.log", "src/build-out/y.ts", "src/main.ts"]);
+    });
+  } finally {
+    await mock.close();
+  }
+});
+
+test("jev_search applies ignore files from parent directories", async () => {
+  const root = ignoredRepo();
+  const mock = await startMock();
+  try {
+    await withClient({ baseUrl: mock.url, env: { JEV_FILE_ROOTS: root } }, async (client) => {
+      await client.callTool({ name: "jev_search", arguments: { question: "q", dir: "src" } });
+      assert.deepEqual(sentPaths(mock), ["src/build-out/y.ts", "src/main.ts"]);
+    });
+  } finally {
+    await mock.close();
+  }
+});
+
+test("jev_search refuses a directory outside the roots", async () => {
+  const root = repo();
+  const mock = await startMock();
+  try {
+    await withClient({ baseUrl: mock.url, env: { JEV_FILE_ROOTS: root } }, async (client) => {
+      const result = await client.callTool({ name: "jev_search", arguments: { question: "q", dir: "/etc" } });
+      assert.equal(result.isError, true);
+      assert.match(payload(result).error.message, /outside the allowed roots/);
+    });
+  } finally {
+    await mock.close();
+  }
+});
+
+test("jev_search says to install ripgrep when it cannot find rg", async () => {
+  const root = repo();
+  const mock = await startMock();
+  try {
+    await withClient({ baseUrl: mock.url, env: { JEV_FILE_ROOTS: root, JEV_RG_PATH: "/nonexistent/rg" } }, async (client) => {
+      const result = await client.callTool({ name: "jev_search", arguments: { question: "q", pattern: "retr" } });
+      assert.equal(result.isError, true);
+      assert.match(payload(result).error.message, /ripgrep/);
+    });
+  } finally {
+    await mock.close();
+  }
+});
+
+test("jev_search never reads an ignored file", async () => {
+  const root = ignoredRepo();
+  const mock = await startMock();
+  try {
+    await withClient({ baseUrl: mock.url, env: { JEV_FILE_ROOTS: root } }, async (client) => {
+      const body = payload(await client.callTool({ name: "jev_search", arguments: { question: "q", pattern: "IGNORED_MARK|main" } }));
+      assert.equal(body.candidates, 1);
+      assert.ok(!mock.only().state.includes("IGNORED_MARK"));
     });
   } finally {
     await mock.close();

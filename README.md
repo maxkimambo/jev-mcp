@@ -8,7 +8,8 @@ it behind a label.
 
 ## Install
 
-Requires Node 20.12+ and a TypeSafe API key from
+Requires Node 20.12+, [ripgrep](https://github.com/BurntSushi/ripgrep) on PATH for
+`jev_search`, and a TypeSafe API key from
 [console.typesafe.ai](https://console.typesafe.ai/settings/keys).
 
 ### Claude Code plugin
@@ -103,9 +104,11 @@ missing-key error. Leaving `env` out keeps all three key sources live.
 | `jev_screen` | four Nouls + a code check | You are about to read untrusted text and want to know if it tries to steer you |
 | `jev_models` | — | Confirm the key works and find a model id |
 
-`jev_search` walks a directory server-side (skipping `.git`, `node_modules`, build
-output and credential files), keeps lines matching an optional regex, and ranks them
-with their neighbours; hits come back as `path`, `line` and the line's text.
+`jev_search` runs ripgrep over a directory server-side, so git's ignore rules, `.ignore`
+files, and hidden and binary files are handled as `rg` handles them; credential files
+are filtered out before anything is sent. Lines matching an optional regex (Rust
+syntax) become candidates, Jev ranks them with their neighbours, and hits come back
+as `path`, `line` and the line's text.
 `jev_extract` offers Jev only values that a regex found in the file, so it can pick
 the wrong one but never invent one. `jev_screen` asks fixed signals (instructions
 aimed at an AI, overriding instructions, exfiltration, hidden instructions) and counts
@@ -274,6 +277,7 @@ Point your client at the directory, or copy the file to `~/.claude/skills/jev/`.
 | `JEV_MAX_ITEMS` | Items per `jev_triage` call, `paths` per `jev_ask`, windows per `jev_locate`. Defaults to 50. |
 | `JEV_CONCURRENCY` | Parallel requests within one `jev_triage` call. Defaults to 4, capped at 16. |
 | `JEV_FILE_ROOTS` | Directories `jev_triage`, `jev_ask` `paths` and `jev_locate` may read below. Defaults to the working directory; `off` disables file reads. |
+| `JEV_RG_PATH` | ripgrep binary for `jev_search`. Defaults to `rg` on PATH. |
 | `JEV_KEY_FILE` | Key file path. Defaults to `~/.config/typesafe/key`. Always refused as a `path` item. |
 | `TYPESAFE_LOG_LEVEL` | SDK verbosity. Safe at any level; all output goes to stderr. |
 

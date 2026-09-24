@@ -31,8 +31,9 @@ import type { EntryType, ScoreCriteria } from "@typesafe-ai/sdk";
 import { z } from "zod";
 import { readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
-import { parseRoots, readTextFile, walkFiles } from "./files.js";
+import { join, resolve } from "node:path";
+import { isDeniedPath, parseRoots, readTextFile, resolveSearchDir } from "./files.js";
+import { ripgrep } from "./rg.js";
 import { appendLedger, isSwitchedOn } from "./ops.js";
 import {
   assertStateWithinLimit,
@@ -112,6 +113,7 @@ const maxRetries = (() => {
 })();
 const fileRoots = parseRoots(process.env.JEV_FILE_ROOTS, process.cwd());
 const SWITCH_FILE = process.env.JEV_SWITCH_FILE?.trim() || undefined;
+const RG_PATH = process.env.JEV_RG_PATH?.trim() || "rg";
 const LEDGER_FILE = process.env.JEV_LEDGER?.trim() || undefined;
 for (const setting of [timeout, maxRetries, maxQuestions, maxStateChars, maxItems, concurrency, fileRoots]) {
   if (setting.warning) console.error(`[jev-mcp] ${setting.warning}`);
@@ -918,14 +920,14 @@ server.registerTool(
     title: "Search a directory by meaning",
     annotations: READ_ONLY,
     description:
-      "Find the lines across a whole directory that answer a question, instead of reading pages of grep hits. The server walks the files (skipping .git, node_modules, build output and credential files), keeps lines matching an optional regex 'pattern' as candidates, and Jev ranks them with their neighbouring lines. " +
+      "Find the lines across a whole directory that answer a question, instead of reading pages of grep hits. The server runs ripgrep (honouring .gitignore and .ignore, skipping hidden, binary and credential files), keeps lines matching an optional regex 'pattern' as candidates, and Jev ranks them with their neighbouring lines. " +
       "Returns path, line number and the line's text for the best hits. Use a broad pattern to narrow cheaply (e.g. 'retr|backoff'), then let Jev judge meaning. Without a pattern every non-empty line is a candidate, so also set include or a small dir.",
     inputSchema: {
       question: z.string().min(1).describe("What the lines should answer or address, stated in full."),
       dir: z.string().min(1).default(".").describe("Directory to search, below an allowed root. Relative paths resolve against the first root."),
-      pattern: z.string().min(1).max(200).optional().describe("JavaScript regex a line must match to be a candidate."),
+      pattern: z.string().min(1).max(200).optional().describe("ripgrep (Rust) regex a line must match to be a candidate. No lookaround or backreferences."),
       ignore_case: z.boolean().default(true).describe("Match pattern case-insensitively."),
-      include: z.array(z.string().min(1)).optional().describe("Only files whose path ends with one of these, e.g. ['.ts', '.md']."),
+      include: z.array(z.string().min(1)).optional().describe("Only files whose name ends with one of these, e.g. ['.ts', '.md']."),
       context: z.number().int().min(0).max(3).default(1).describe("Neighbouring lines sent with each candidate, on each side."),
       top: z.number().int().min(1).max(50).default(10).describe("How many hits to return."),
       yes_at_or_above: YesAtOrAbove,
@@ -938,8 +940,7 @@ server.registerTool(
         .array(z.object({ path: z.string(), line: z.number(), text: z.string(), probability: z.number(), window_found: z.number() }))
         .describe("Best first. probability is the line's share within its window; window_found is how likely that window answers at all."),
       candidates: z.number().describe("Lines judged."),
-      files_scanned: z.number(),
-      skipped: z.record(z.number()).describe("Files that could not be read, counted by error kind (binary, oversized, …)."),
+      files_matched: z.number().describe("Files with at least one candidate line."),
       windows: z.number(),
       thresholds: z.object({ yes_at_or_above: z.number(), no_at_or_below: z.number() }),
       model: z.string(),
@@ -950,51 +951,30 @@ server.registerTool(
   guarded("jev_search", (_args, result) => 2 * Number(result?.windows ?? 0), async ({ question, dir, pattern, ignore_case, include, context, top, yes_at_or_above, no_at_or_below }, extra) => {
     try {
       const thresholds = checkThresholds(yes_at_or_above, no_at_or_below);
-      let regex: RegExp | undefined;
-      if (pattern !== undefined) {
-        try {
-          regex = new RegExp(pattern, ignore_case ? "i" : "");
-        } catch (error) {
-          throw new Error(`Invalid pattern: ${error instanceof Error ? error.message : String(error)}`);
-        }
-      }
+      const capacity = maxItems.value * (MAX_CHOICE_OPTIONS - 1);
+      const { matches, filesMatched } = await ripgrep({
+        rgPath: RG_PATH,
+        cwd: await resolveSearchDir(dir, fileRoots.roots),
+        // Without a pattern every non-empty line is a candidate.
+        pattern: pattern ?? "\\S",
+        ignoreCase: ignore_case,
+        globs: include?.map((suffix) => `*${suffix}`) ?? [],
+        context,
+        maxFileSize: maxStateChars.value,
+        limit: capacity,
+        signal: extra.signal,
+      });
 
-      const files = (await walkFiles(dir, { roots: fileRoots.roots, isDenied: isKeyFile })).filter(
-        (f) => include === undefined || include.some((suffix) => f.relative.endsWith(suffix)),
-      );
-      const candidates: { path: string; line: number; text: string; block: string }[] = [];
-      const skipped: Record<string, number> = {};
-      let scanned = 0;
-      for (const file of files) {
-        let content: string;
-        try {
-          content = await readTextFile(file.absolute, { roots: fileRoots.roots, maxChars: maxStateChars.value, isDenied: isKeyFile });
-        } catch (error) {
-          const kind = describeError(error).kind;
-          skipped[kind] = (skipped[kind] ?? 0) + 1;
-          continue;
-        }
-        scanned += 1;
-        const lines = content.split(/\r?\n/);
-        const path = join(dir, file.relative);
-        lines.forEach((line, i) => {
-          if (line.trim() === "" || (regex && !regex.test(line))) return;
-          const id = `C${String(candidates.length + 1).padStart(4, "0")}`;
-          const around = lines
-            .slice(Math.max(0, i - context), i + context + 1)
-            .map((l, j) => ({ l, at: Math.max(0, i - context) + j }))
-            .filter(({ l, at }) => at !== i && l.trim() !== "")
-            .map(({ l }) => `      ${clip(l.trim())}`);
-          candidates.push({ path, line: i + 1, text: line.trim(), block: [`${id}| ${path}:${i + 1}: ${clip(line.trim())}`, ...around].join("\n") });
+      const candidates = matches
+        .map((m) => ({ ...m, path: join(dir, m.path) }))
+        .filter((m) => !isDeniedPath(m.path) && !isKeyFile(resolve(fileRoots.roots[0]!, m.path)))
+        .map((m, i) => {
+          const header = `C${String(i + 1).padStart(4, "0")}| ${m.path}:${m.line}: ${clip(m.text.trim())}`;
+          return { path: m.path, line: m.line, text: m.text.trim(), block: [header, ...m.context.map((l) => `      ${clip(l.trim())}`)].join("\n") };
         });
-      }
 
       if (candidates.length === 0) {
-        return ok({ found: "no" as const, probability_found: 0, hits: [], candidates: 0, files_scanned: scanned, skipped, windows: 0, thresholds, model: model(), usage: { input_tokens: 0, output_tokens: 0 }, latency_ms: 0 });
-      }
-      const capacity = maxItems.value * (MAX_CHOICE_OPTIONS - 1);
-      if (candidates.length > capacity) {
-        throw new Error(`${candidates.length} candidate lines is more than JEV_MAX_ITEMS × 254 (${capacity}) can judge. Narrow it with pattern, include or dir.`);
+        return ok({ found: "no" as const, probability_found: 0, hits: [], candidates: 0, files_matched: filesMatched, windows: 0, thresholds, model: model(), usage: { input_tokens: 0, output_tokens: 0 }, latency_ms: 0 });
       }
       const groups = packBlocks(candidates.map((c) => c.block.length + 1), maxStateChars.value);
       if (groups.length > maxItems.value) throw tooManyWindows("The candidate set", groups.length);
@@ -1024,8 +1004,7 @@ server.registerTool(
           return { path: c.path, line: c.line, text: c.text, probability, window_found };
         }),
         candidates: candidates.length,
-        files_scanned: scanned,
-        skipped,
+        files_matched: filesMatched,
         windows: groups.length,
         thresholds,
         model: tally.model,
