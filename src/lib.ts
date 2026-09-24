@@ -38,7 +38,13 @@ export const MAX_CHOICE_OPTIONS = 255;
 export const DEFAULT_MAX_SCORE_LEVELS = 255;
 export const DEFAULT_MAX_QUESTIONS = 64;
 export const DEFAULT_MAX_STATE_CHARS = 200_000;
-export const DEFAULT_TIMEOUT_MS = 15_000;
+/**
+ * A tool call that waits on a slow judgment stalls the agent that asked, so the
+ * defaults favour failing fast: a short timeout and no SDK retries. Both are
+ * configurable for batch work where waiting is fine.
+ */
+export const DEFAULT_TIMEOUT_MS = 5_000;
+export const DEFAULT_MAX_RETRIES = 0;
 
 /**
  * Caps for `jev_triage`, which fans one question set out over many items. Each
@@ -221,12 +227,13 @@ export type ErrorKind =
   | "invalid_arguments"
   | "malformed_response"
   | "file_access"
+  | "disabled"
   | "unknown";
 
 export interface DescribedError {
   kind: ErrorKind;
   message: string;
-  /** True when the same request may succeed later. The SDK already retried. */
+  /** True when the same request may succeed later. */
   retryable: boolean;
   status?: number;
   /** TypeSafe request id, the thing support needs to trace a failure. */
@@ -244,6 +251,10 @@ export interface DescribedError {
  */
 export function describeError(error: unknown): DescribedError {
   const message = error instanceof Error ? error.message : String(error);
+
+  if (error instanceof DisabledError) {
+    return { kind: "disabled", message, retryable: false, hint: "Carry on without Jev. Only the user can switch it on; do not ask them to unless Jev is essential." };
+  }
 
   if (error instanceof MalformedResponseError) {
     return {
@@ -268,19 +279,19 @@ export function describeError(error: unknown): DescribedError {
     };
   }
   if (error instanceof APIConnectionError) {
-    return { kind: "connection", message, retryable: true, hint: "Check network access to api.typesafe.ai." };
+    return { kind: "connection", message, retryable: true, hint: "Check network access to the API (api.typesafe.ai or openrouter.ai)." };
   }
 
   if (error instanceof APIError) {
     const base = { message, status: error.status, requestId: error.requestId };
     if (error instanceof AuthenticationError) {
-      return { ...base, kind: "authentication", retryable: false, hint: "The API key was rejected. Check TYPESAFE_API_KEY in the server's environment." };
+      return { ...base, kind: "authentication", retryable: false, hint: "The API key was rejected. Check TYPESAFE_API_KEY or OPENROUTER_API_KEY in the server's environment, or the key file." };
     }
     if (error instanceof PermissionDeniedError) {
       return { ...base, kind: "permission_denied", retryable: false, hint: "The key is valid but lacks access to this model or account." };
     }
     if (error instanceof RateLimitError) {
-      return { ...base, kind: "rate_limit", retryable: true, hint: "Rate limited after the SDK's own retries. Back off before trying again." };
+      return { ...base, kind: "rate_limit", retryable: true, hint: "Rate limited. Back off before trying again." };
     }
     if (error instanceof UnprocessableEntityError || error instanceof BadRequestError) {
       return { ...base, kind: "invalid_request", retryable: false, hint: "The request failed validation. The message names the offending field." };
@@ -309,6 +320,14 @@ export function describeError(error: unknown): DescribedError {
  * Thrown when the API returns an answer that does not match the question that
  * was sent. Nothing downstream should act on such an answer.
  */
+/** Thrown when the operator switch (JEV_SWITCH_FILE) says off. */
+export class DisabledError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "DisabledError";
+  }
+}
+
 export class MalformedResponseError extends Error {
   constructor(message: string) {
     super(message);
@@ -528,4 +547,163 @@ export function validateScoreAnswer(answer: unknown, levelCount: number, label: 
 export function validateNoulAnswer(answer: unknown, label: string): void {
   const a = asRecord(answer, label);
   if (!isUnitInterval(a.noul)) throw new MalformedResponseError(`Answer '${label}' has no probability in [0, 1].`);
+}
+
+// ── Provider ────────────────────────────────────────────────────────────────
+
+export const OPENROUTER_BASE_URL = "https://openrouter.ai/api";
+export const OPENROUTER_MODEL = "~typesafe/jev-latest";
+
+export interface Provider {
+  name: "typesafe" | "openrouter";
+  /** Undefined leaves the SDK to its own TYPESAFE_BASE_URL / default resolution. */
+  baseURL?: string;
+  model: string;
+}
+
+/**
+ * Pick the endpoint from the key itself, so one key file or variable is enough.
+ *
+ * OpenRouter keys carry an `sk-or-` prefix and OpenRouter serves Jev on the same
+ * /v1/systemone shape under its own model id. Explicit TYPESAFE_BASE_URL and
+ * JEV_MODEL always win over what the key implies.
+ */
+export function resolveProvider(key: string | undefined, env: { TYPESAFE_BASE_URL?: string; JEV_MODEL?: string }): Provider {
+  const openrouter = key?.startsWith("sk-or-") === true;
+  const explicitBase = env.TYPESAFE_BASE_URL?.trim() || undefined;
+  return {
+    name: openrouter ? "openrouter" : "typesafe",
+    baseURL: explicitBase ?? (openrouter ? OPENROUTER_BASE_URL : undefined),
+    model: env.JEV_MODEL?.trim() || (openrouter ? OPENROUTER_MODEL : "jev-latest"),
+  };
+}
+
+// ── Line windows for jev_locate ─────────────────────────────────────────────
+
+export interface LineWindow {
+  /** 1-based number of the first line in this window. */
+  first: number;
+  /** Option key → the line's text, e.g. "L0042" → "…". Empty lines are kept out. */
+  lines: Record<string, string>;
+}
+
+export function lineId(n: number): string {
+  return `L${String(n).padStart(4, "0")}`;
+}
+
+/**
+ * Split text into windows Jev can answer one Choice over.
+ *
+ * A Choice takes at most 255 options, so a window holds at most 254 lines (the
+ * last option slot is kept for the no-match option). A window also closes before
+ * its tagged text would pass `maxChars`. Blank lines are skipped, not options.
+ * A single line longer than `maxChars` cannot be judged and is an error.
+ */
+export function lineWindows(text: string, maxChars: number, maxLines = MAX_CHOICE_OPTIONS - 1): LineWindow[] {
+  const windows: LineWindow[] = [];
+  let current: LineWindow | undefined;
+  let size = 0;
+  const all = text.split(/\r?\n/);
+  for (let i = 0; i < all.length; i += 1) {
+    const line = all[i]!;
+    if (line.trim() === "") continue;
+    const n = i + 1;
+    const cost = line.length + 8;
+    if (cost > maxChars) {
+      throw new Error(`Line ${n} is ${line.length} characters, above the ${maxChars} limit. Nothing is truncated.`);
+    }
+    if (!current || Object.keys(current.lines).length >= maxLines || size + cost > maxChars) {
+      current = { first: n, lines: {} };
+      windows.push(current);
+      size = 0;
+    }
+    current.lines[lineId(n)] = line;
+    size += cost;
+  }
+  return windows;
+}
+
+/**
+ * Group consecutive block indices into windows under a character budget and an
+ * option count, preserving order. A single block over the budget is an error.
+ */
+export function packBlocks(sizes: readonly number[], maxChars: number, maxPer = MAX_CHOICE_OPTIONS - 1): number[][] {
+  const windows: number[][] = [];
+  let used = 0;
+  sizes.forEach((size, index) => {
+    if (size > maxChars) throw new Error(`Block ${index + 1} is ${size} characters, above the ${maxChars} limit.`);
+    const current = windows[windows.length - 1];
+    if (!current || current.length >= maxPer || used + size > maxChars) {
+      windows.push([index]);
+      used = size;
+    } else {
+      current.push(index);
+      used += size;
+    }
+  });
+  return windows;
+}
+
+/** Split text at line boundaries into chunks of at most `maxChars`. */
+export function chunkText(text: string, maxChars: number): string[] {
+  const chunks: string[] = [];
+  let current: string | undefined;
+  for (const line of text.split("\n")) {
+    if (line.length > maxChars) throw new Error(`A line is ${line.length} characters, above the ${maxChars} limit.`);
+    if (current !== undefined && current.length + 1 + line.length <= maxChars) {
+      current += `\n${line}`;
+    } else {
+      if (current !== undefined) chunks.push(current);
+      current = line;
+    }
+  }
+  if (current !== undefined) chunks.push(current);
+  return chunks;
+}
+
+/** Zero-width and bidirectional control characters: invisible to a reader, not to a model. */
+const HIDDEN_CHARS = /[​-‏‪-‮⁠-⁤⁦-⁩﻿]/g;
+
+export function countHiddenChars(text: string): number {
+  return text.match(HIDDEN_CHARS)?.length ?? 0;
+}
+
+// ── Candidate values for jev_extract ────────────────────────────────────────
+
+export const EXTRACT_KINDS = ["number", "version", "url", "email", "date", "quoted", "line"] as const;
+export type ExtractKind = (typeof EXTRACT_KINDS)[number];
+
+const CANDIDATE_PATTERNS: Record<Exclude<ExtractKind, "line">, RegExp> = {
+  number: /-?\d+(?:[_,]\d{3})*(?:\.\d+)?/g,
+  version: /\bv?\d+\.\d+(?:\.\d+)*(?:-[0-9A-Za-z.-]*[0-9A-Za-z])?(?:\+[0-9A-Za-z.-]+)?/g,
+  url: /https?:\/\/[^\s"'<>()]+/g,
+  email: /[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g,
+  date: /\b\d{4}-\d{2}-\d{2}\b/g,
+  quoted: /"([^"\n]{1,200})"|'([^'\n]{1,200})'|`([^`\n]{1,200})`/g,
+};
+
+export interface Candidate {
+  value: string;
+  /** 1-based line the value appears on. */
+  line: number;
+}
+
+/**
+ * Find every value of a kind, in document order. The model later picks among
+ * these, so it can choose the wrong value but never invent one.
+ */
+export function extractCandidates(text: string, kind: ExtractKind): Candidate[] {
+  const out: Candidate[] = [];
+  text.split(/\r?\n/).forEach((line, i) => {
+    if (kind === "line") {
+      if (line.trim() !== "") out.push({ value: line.trim(), line: i + 1 });
+      return;
+    }
+    for (const match of line.matchAll(CANDIDATE_PATTERNS[kind])) {
+      let value = match[1] ?? match[2] ?? match[3] ?? match[0];
+      if (kind === "url") value = value.replace(/[.,;:!?]+$/, "");
+      out.push({ value, line: i + 1 });
+    }
+  });
+  return out;
 }

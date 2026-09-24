@@ -12,8 +12,8 @@
  *  5. No error message ever carries file contents.
  */
 
-import { open, realpath, stat } from "node:fs/promises";
-import { delimiter, isAbsolute, normalize, relative, resolve, sep } from "node:path";
+import { open, readdir, realpath, stat } from "node:fs/promises";
+import { delimiter, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 import { FileAccessError } from "./lib.js";
 
 export interface ParsedRoots {
@@ -148,4 +148,53 @@ export async function readTextFile(requested: string, options: ReadOptions): Pro
   } finally {
     await handle.close();
   }
+}
+
+/** Directories never walked: version control, dependencies, build output. */
+const SKIPPED_DIRS = new Set([".git", ".hg", ".svn", "node_modules", "vendor", "dist", "build", "target", "coverage", ".venv", "venv", "__pycache__", ".next"]);
+
+export interface WalkedFile {
+  /** Path relative to the walked directory, `/`-separated. */
+  relative: string;
+  /** The same file under the directory as the caller named it. */
+  absolute: string;
+}
+
+/**
+ * List the regular files below a directory, sorted, for jev_search.
+ *
+ * The directory itself must be an allowed root or sit below one. Symlinks are
+ * not followed. Vendored, VCS and credential paths are left out here; each file
+ * is still read through readTextFile, which applies every other rule.
+ */
+export async function walkFiles(dir: string, options: { roots: readonly string[]; isDenied?: (path: string) => boolean }): Promise<WalkedFile[]> {
+  const { roots } = options;
+  if (roots.length === 0) {
+    throw new FileAccessError("File reads are disabled (JEV_FILE_ROOTS=off).", "Set JEV_FILE_ROOTS to a directory.");
+  }
+  const lexical = isAbsolute(dir) ? normalize(dir) : resolve(roots[0]!, dir);
+  const inside = (root: string, target: string) => target === root || isWithinRoot(root, target);
+  const realRoots = (await Promise.all(roots.map((root) => realpath(root).catch(() => undefined)))).filter((r): r is string => r !== undefined);
+  let real: string;
+  try {
+    real = await realpath(lexical);
+  } catch {
+    throw new FileAccessError(`Directory not found: ${dir}`, "Relative directories resolve against the first allowed root.");
+  }
+  if (!roots.some((root) => inside(root, lexical)) || !realRoots.some((root) => inside(root, real))) {
+    throw new FileAccessError(`Directory is outside the allowed roots: ${dir}`, OUTSIDE_HINT);
+  }
+
+  const entries = await readdir(real, { recursive: true, withFileTypes: true });
+  const files: WalkedFile[] = [];
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    const rel = relative(real, join(entry.parentPath, entry.name));
+    const segments = rel.split(sep);
+    if (segments.some((segment) => SKIPPED_DIRS.has(segment))) continue;
+    const absolute = join(lexical, rel);
+    if (isDeniedPath(rel) || options.isDenied?.(absolute)) continue;
+    files.push({ relative: segments.join("/"), absolute });
+  }
+  return files.sort((a, b) => (a.relative < b.relative ? -1 : a.relative > b.relative ? 1 : 0));
 }

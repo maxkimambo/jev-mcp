@@ -47,7 +47,11 @@ Do not register the server directly **and** install the plugin. Two servers name
 ### The key
 
 The server reads the key from `TYPESAFE_API_KEY` in its environment, then from
-`JEV_API_KEY`, then from `~/.config/typesafe/key`. It is never a tool argument, so it
+`JEV_API_KEY`, then `OPENROUTER_API_KEY`, then from `~/.config/typesafe/key`.
+
+An [OpenRouter](https://openrouter.ai/~typesafe/jev-latest) key works too. A key
+starting with `sk-or-` is routed to `https://openrouter.ai/api` with model
+`~typesafe/jev-latest`; `TYPESAFE_BASE_URL` and `JEV_MODEL` still override both. It is never a tool argument, so it
 cannot land in a transcript or in a model's context.
 
 The key file is the most reliable source, because some MCP clients strip the
@@ -93,7 +97,23 @@ missing-key error. Leaving `env` out keeps all three key sources live.
 | `jev_check` | Noul | The answer is yes or no, and you want the probability |
 | `jev_ask` | all three | You have several questions about the same state |
 | `jev_triage` | all three, per item | You have many items and want one result each, with files read server-side |
+| `jev_locate` | Choice + Noul, per window | You need the lines of one large file that answer a question, without reading it |
+| `jev_search` | Choice + Noul, per window | You need the lines across a directory that answer a question, instead of pages of grep hits |
+| `jev_extract` | Choice + Noul over regex-found values | You want one short value from a file (port, version, URL, date, quoted setting) without reading it |
+| `jev_screen` | four Nouls + a code check | You are about to read untrusted text and want to know if it tries to steer you |
 | `jev_models` | — | Confirm the key works and find a model id |
+
+`jev_search` walks a directory server-side (skipping `.git`, `node_modules`, build
+output and credential files), keeps lines matching an optional regex, and ranks them
+with their neighbours; hits come back as `path`, `line` and the line's text.
+`jev_extract` offers Jev only values that a regex found in the file, so it can pick
+the wrong one but never invent one. `jev_screen` asks fixed signals (instructions
+aimed at an AI, overriding instructions, exfiltration, hidden instructions) and counts
+invisible Unicode in code; any hidden character makes the verdict `suspicious`.
+
+`jev_ask` takes `paths` instead of `state` to ask about files you have not read: the
+server reads them and Jev sees one state keyed by path. Every tool is annotated
+read-only, so clients may run it in parallel with other reads.
 
 Every tool returns the full probability distribution alongside the answer, plus
 `confidence` for Choice and Score. Results come back as MCP structured content, so a
@@ -245,12 +265,15 @@ Point your client at the directory, or copy the file to `~/.claude/skills/jev/`.
 | --- | --- |
 | `TYPESAFE_API_KEY` | Required. `JEV_API_KEY` also works. |
 | `JEV_MODEL` | Model id. Defaults to `jev-latest`. |
-| `JEV_TIMEOUT_MS` | Per-attempt timeout. Defaults to 15000. |
+| `JEV_TIMEOUT_MS` | Per-attempt timeout. Defaults to 5000: a stalled judgment stalls the agent. |
+| `JEV_MAX_RETRIES` | SDK retries after a failed attempt. Defaults to 0, for the same reason. |
+| `JEV_SWITCH_FILE` | Optional. A JSON file `{"enabled": true}`; while it is missing or says otherwise, every tool refuses and sends nothing. Read per call. |
+| `JEV_LEDGER` | Optional. A JSONL file that gets one line per call: tool, ok, questions, input tokens, cost, ms, client. Never content. |
 | `JEV_MAX_QUESTIONS` | Questions per `jev_ask` or `jev_triage`. Defaults to 64. |
 | `JEV_MAX_STATE_CHARS` | Largest state accepted, per item for `jev_triage`. Defaults to 200000. |
-| `JEV_MAX_ITEMS` | Items per `jev_triage` call. Defaults to 50. |
+| `JEV_MAX_ITEMS` | Items per `jev_triage` call, `paths` per `jev_ask`, windows per `jev_locate`. Defaults to 50. |
 | `JEV_CONCURRENCY` | Parallel requests within one `jev_triage` call. Defaults to 4, capped at 16. |
-| `JEV_FILE_ROOTS` | Directories `jev_triage` may read below. Defaults to the working directory; `off` disables file reads. |
+| `JEV_FILE_ROOTS` | Directories `jev_triage`, `jev_ask` `paths` and `jev_locate` may read below. Defaults to the working directory; `off` disables file reads. |
 | `JEV_KEY_FILE` | Key file path. Defaults to `~/.config/typesafe/key`. Always refused as a `path` item. |
 | `TYPESAFE_LOG_LEVEL` | SDK verbosity. Safe at any level; all output goes to stderr. |
 
