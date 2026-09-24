@@ -1,12 +1,12 @@
 ---
-name: jev
+name: jev-tools
 description: >
   Let the jev MCP tools read text for you so only the answer enters your context. Use
   before reading more than two files to orient, before reading a large file or log
   whole, instead of reading a pile of grep matches, when you need one value from a
   file (port, version, URL, date, setting), before reading a fetched page, issue or
   email, and when the same judgment repeats across many items. Only while jev is on
-  (`/jev on`); the tools refuse while it is off.
+  (`/jev:jev on`); the tools refuse while it is off.
 ---
 
 # Jev reads, you decide
