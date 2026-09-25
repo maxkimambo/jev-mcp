@@ -9,8 +9,9 @@ it behind a label.
 ## Install
 
 Requires Node 20.12+, [ripgrep](https://github.com/BurntSushi/ripgrep) on PATH for
-`jev_search`, optionally [markitdown](https://github.com/microsoft/markitdown) for PDF and
-Office pages in `jev_rank_pages` (`uv tool install 'markitdown[pdf,docx,pptx,xlsx]'`), and
+`jev_search`, optionally [trafilatura](https://github.com/adbar/trafilatura) and
+[markitdown](https://github.com/microsoft/markitdown) for `jev_rank_pages`
+(`uv tool install trafilatura` and `uv tool install 'markitdown[pdf,docx,pptx,xlsx]'`), and
 a TypeSafe API key from
 [console.typesafe.ai](https://console.typesafe.ai/settings/keys).
 
@@ -133,8 +134,11 @@ OpenRouter key to plugin servers, so the key file is the dependable route.
 only fetches https, and refuses any host that resolves to a private, loopback or
 link-local address, checked on the connection itself and again on every redirect, so
 a search result cannot point it at your LAN or a cloud metadata endpoint. It asks for
-markdown first (`Accept: text/markdown`), which docs platforms usually serve; HTML is
-reduced to text; PDF and Office documents go through markitdown's stdin, fully offline.
+markdown first (`Accept: text/markdown`), which docs platforms usually serve. HTML goes
+through trafilatura, which keeps the main content and drops menus, footers and ads, and
+falls back to plain text without it. PDF and Office documents go through markitdown.
+Both converters read the already-fetched bytes on stdin and never fetch anything
+themselves.
 Pages above four windows are skipped as too long to judge.
 
 `jev_search`, `jev_locate` and `jev_extract` take up to 16 `questions` and send each window
@@ -310,6 +314,7 @@ answer: which tool replaces which read, how to phrase the question, and how to a
 | `JEV_CONCURRENCY` | Parallel requests within one `jev_triage` call. Defaults to 4, capped at 16. |
 | `JEV_FILE_ROOTS` | Directories `jev_triage`, `jev_ask` `paths` and `jev_locate` may read below. Defaults to the working directory; `off` disables file reads. |
 | `JEV_RG_PATH` | ripgrep binary for `jev_search`. Defaults to `rg` on PATH. |
+| `JEV_TRAFILATURA_PATH` | trafilatura binary for HTML pages in `jev_rank_pages`. Defaults to `trafilatura` on PATH; without it pages are reduced to plain text. |
 | `JEV_MARKITDOWN_PATH` | markitdown binary for PDF and Office pages in `jev_rank_pages`. Defaults to `markitdown` on PATH. |
 | `JEV_ALLOW_HOSTS` | Comma-separated hosts `jev_rank_pages` may fetch even though they resolve to private addresses, over http too, e.g. an intranet wiki. Empty by default. |
 | `JEV_KEY_FILE` | Key file path. Defaults to `$XDG_CONFIG_HOME/jev/api_key`, i.e. `~/.config/jev/api_key`. Must be 0600 and yours. Always refused as a `path` item. |
