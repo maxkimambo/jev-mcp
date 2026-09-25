@@ -133,19 +133,20 @@ test("jev_locate tags each non-empty line, asks where + whether, and returns lin
     await withClient({ baseUrl: mock.url, env: { JEV_FILE_ROOTS: root } }, async (client) => {
       const result = await client.callTool({
         name: "jev_locate",
-        arguments: { path: "app.log", question: "Which line shows the failure?", top: 2 },
+        arguments: { path: "app.log", questions: ["Which line shows the failure?"], top: 2 },
       });
       assert.notEqual(result.isError, true, JSON.stringify(result.content));
       const sent = mock.only();
       assert.equal(sent.state, "L0001| boot ok\nL0003| listening on 8080\nL0004| ERROR upstream timeout");
-      assert.deepEqual(Object.keys(sent.questions.where.criteria), ["L0001", "L0003", "L0004", "none"]);
-      assert.equal(sent.questions.exists.type, "noul");
+      assert.deepEqual(Object.keys(sent.questions.q1_where.criteria), ["L0001", "L0003", "L0004", "none"]);
+      assert.equal(sent.questions.q1_exists.type, "noul");
 
       const body = payload(result);
-      assert.equal(body.found, "yes");
-      assert.equal(body.lines.length, 2);
-      assert.equal(body.lines[0].line, 1, "the stand-in favours the first option");
-      assert.ok(body.lines.every((l) => l.line !== undefined && !("text" in l)));
+      const [answer] = body.results;
+      assert.equal(answer.found, "yes");
+      assert.equal(answer.lines.length, 2);
+      assert.equal(answer.lines[0].line, 1, "the stand-in favours the first option");
+      assert.ok(answer.lines.every((l) => l.line !== undefined && !("text" in l)));
       assert.ok(!JSON.stringify(result).includes("ERROR upstream"), "line text never reaches the tool result");
       assert.equal(body.lines_considered, 3);
     });
@@ -159,11 +160,11 @@ test("jev_locate splits long content into windows and ranks across them", async 
   try {
     await withClient({ baseUrl: mock.url }, async (client) => {
       const text = Array.from({ length: 300 }, (_, i) => `line ${i + 1}`).join("\n");
-      const body = payload(await client.callTool({ name: "jev_locate", arguments: { text, question: "q" } }));
+      const body = payload(await client.callTool({ name: "jev_locate", arguments: { text, questions: ["q"] } }));
       assert.equal(mock.requests.length, 2);
       assert.equal(body.windows, 2);
       assert.equal(body.lines_considered, 300);
-      assert.deepEqual(body.lines.slice(0, 2).map((l) => l.line).sort((a, b) => a - b), [1, 255], "each window's pick competes");
+      assert.deepEqual(body.results[0].lines.slice(0, 2).map((l) => l.line).sort((a, b) => a - b), [1, 255], "each window's pick competes");
     });
   } finally {
     await mock.close();
@@ -173,9 +174,9 @@ test("jev_locate splits long content into windows and ranks across them", async 
 test("jev_locate rejects a malformed answer instead of ranking it", async () => {
   const mock = await startMock();
   try {
-    mock.state.answers = { where: { type: "choice", choice: "L9999", confidence: 0.9, probabilities: { L9999: 1 } }, exists: { type: "noul", noul: 0.9 } };
+    mock.state.answers = { q1_where: { type: "choice", choice: "L9999", confidence: 0.9, probabilities: { L9999: 1 } }, q1_exists: { type: "noul", noul: 0.9 } };
     await withClient({ baseUrl: mock.url }, async (client) => {
-      const result = await client.callTool({ name: "jev_locate", arguments: { text: "a\nb", question: "q" } });
+      const result = await client.callTool({ name: "jev_locate", arguments: { text: "a\nb", questions: ["q"] } });
       assert.equal(result.isError, true);
       assert.equal(payload(result).error.kind, "malformed_response");
     });

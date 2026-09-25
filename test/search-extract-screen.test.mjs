@@ -68,11 +68,11 @@ test("jev_search greps server-side, sends candidates with context, and returns h
     await withClient({ baseUrl: mock.url, env: { JEV_FILE_ROOTS: root } }, async (client) => {
       const result = await client.callTool({
         name: "jev_search",
-        arguments: { question: "Where is the retry policy configured?", pattern: "retr", context: 1 },
+        arguments: { questions: ["Where is the retry policy configured?"], pattern: "retr", context: 1 },
       });
       assert.notEqual(result.isError, true, JSON.stringify(result.content));
       const sent = mock.only();
-      assert.deepEqual(Object.keys(sent.questions.where.criteria), ["C0001", "C0002", "none"]);
+      assert.deepEqual(Object.keys(sent.questions.q1_where.criteria), ["C0001", "C0002", "none"]);
       assert.match(sent.state, /C0001\| src\/http\/client.ts:2: const retries = 3;/);
       assert.match(sent.state, /import x from 'y';/, "a candidate carries its neighbouring lines");
       for (const never of ["retry forever", "RETRY_TOKEN", "retry = 1", "a\u0000b"]) {
@@ -80,11 +80,67 @@ test("jev_search greps server-side, sends candidates with context, and returns h
       }
 
       const body = payload(result);
-      assert.deepEqual(body.hits[0], { path: "src/http/client.ts", line: 2, text: "const retries = 3;", probability: 0.9, window_found: 0.9 });
-      assert.equal(body.found, "yes");
+      assert.deepEqual(body.results[0].hits[0], { path: "src/http/client.ts", line: 2, text: "const retries = 3;", probability: 0.9, window_found: 0.9 });
+      assert.equal(body.results[0].found, "yes");
       assert.equal(body.candidates, 2);
       assert.equal(body.files_matched, 2);
     });
+  } finally {
+    await mock.close();
+  }
+});
+
+test("jev_search batches questions: one request per window, one result per question", async () => {
+  const root = repo();
+  const mock = await startMock();
+  try {
+    mock.state.noul = 0.9;
+    await withClient({ baseUrl: mock.url, env: { JEV_FILE_ROOTS: root } }, async (client) => {
+      const questions = ["Where is the retry count set?", "Where is the backoff delay set?", "Where is the port set?"];
+      const result = await client.callTool({ name: "jev_search", arguments: { questions, pattern: "retr|backoff|port" } });
+      assert.notEqual(result.isError, true, JSON.stringify(result.content));
+      const sent = mock.only();
+      assert.deepEqual(Object.keys(sent.questions), ["q1_where", "q1_exists", "q2_where", "q2_exists", "q3_where", "q3_exists"]);
+      assert.match(sent.questions.q2_where.instructions, /backoff delay/);
+
+      const body = payload(result);
+      assert.deepEqual(body.results.map((r) => r.question), questions);
+      assert.ok(body.results.every((r) => r.found === "yes" && r.hits.length > 0));
+      assert.equal(body.windows, 1);
+    });
+  } finally {
+    await mock.close();
+  }
+});
+
+test("jev_locate batches questions across windows without multiplying requests", async () => {
+  const mock = await startMock();
+  try {
+    await withClient({ baseUrl: mock.url }, async (client) => {
+      const text = Array.from({ length: 300 }, (_, i) => `line ${i + 1}`).join("\n");
+      const body = payload(await client.callTool({ name: "jev_locate", arguments: { text, questions: ["a?", "b?"] } }));
+      assert.equal(mock.requests.length, 2, "two windows, two requests, however many questions");
+      assert.deepEqual(body.results.map((r) => r.question), ["a?", "b?"]);
+      assert.ok(body.results.every((r) => r.lines.length > 0));
+    });
+  } finally {
+    await mock.close();
+  }
+});
+
+test("the ledger counts every batched question, and a batch has a ceiling", async () => {
+  const root = repo();
+  const ledger = join(root, "..", `ledger-${Date.now()}.jsonl`);
+  const mock = await startMock();
+  try {
+    await withClient({ baseUrl: mock.url, env: { JEV_FILE_ROOTS: root, JEV_LEDGER: ledger } }, async (client) => {
+      await client.callTool({ name: "jev_search", arguments: { questions: ["a?", "b?"], pattern: "retr" } });
+      const tooMany = await client.callTool({ name: "jev_search", arguments: { questions: Array.from({ length: 17 }, (_, i) => `q${i}?`), pattern: "retr" } });
+      assert.equal(tooMany.isError, true);
+    });
+    const { readFileSync } = await import("node:fs");
+    const [entry] = readFileSync(ledger, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    assert.equal(entry.questions, 4, "two questions, a pick and an exists check each, one window");
   } finally {
     await mock.close();
   }
@@ -95,14 +151,14 @@ test("jev_search narrows by include and refuses a candidate set it cannot judge"
   const mock = await startMock();
   try {
     await withClient({ baseUrl: mock.url, env: { JEV_FILE_ROOTS: root, JEV_MAX_ITEMS: "1" } }, async (client) => {
-      let body = payload(await client.callTool({ name: "jev_search", arguments: { question: "q", pattern: "retr", include: [".md"] } }));
+      let body = payload(await client.callTool({ name: "jev_search", arguments: { questions: ["q"], pattern: "retr", include: [".md"] } }));
       assert.equal(body.candidates, 0);
-      assert.equal(body.found, "no");
+      assert.equal(body.results[0].found, "no");
       assert.equal(mock.requests.length, 0, "no candidates means no request");
 
       const many = Array.from({ length: 300 }, (_, i) => `line ${i}`).join("\n");
       writeFileSync(join(root, "big.txt"), many);
-      const result = await client.callTool({ name: "jev_search", arguments: { question: "q", include: [".txt"] } });
+      const result = await client.callTool({ name: "jev_search", arguments: { questions: ["q"], include: [".txt"] } });
       assert.equal(result.isError, true);
       assert.match(payload(result).error.message, /Narrow it/);
     });
@@ -115,7 +171,7 @@ test("jev_search rejects an invalid regex before reading anything", async () => 
   const mock = await startMock();
   try {
     await withClient({ baseUrl: mock.url }, async (client) => {
-      const result = await client.callTool({ name: "jev_search", arguments: { question: "q", pattern: "(" } });
+      const result = await client.callTool({ name: "jev_search", arguments: { questions: ["q"], pattern: "(" } });
       assert.equal(result.isError, true);
       assert.match(payload(result).error.message, /pattern/);
     });
@@ -138,7 +194,7 @@ test("jev_extract offers only regex-found values and returns the chosen one verb
       });
       assert.notEqual(result.isError, true, JSON.stringify(result.content));
       const sent = mock.only();
-      assert.deepEqual(Object.values(sent.questions.pick.criteria).slice(0, 2).map((d) => d.split(" (line")[0]), [
+      assert.deepEqual(Object.values(sent.questions.q1_where.criteria).slice(0, 2).map((d) => d.split(" (line")[0]), [
         "https://example.com/docs",
         "https://example.com/api.",
       ].map((u) => u.replace(/\.$/, "")));
@@ -172,8 +228,8 @@ test("jev_extract returns null when Jev picks the no-match option", async () => 
   const mock = await startMock();
   try {
     mock.state.answers = {
-      pick: { type: "choice", choice: "none", confidence: 0.9, probabilities: { X0001: 0.1, none: 0.9 } },
-      exists: { type: "noul", noul: 0.1 },
+      q1_where: { type: "choice", choice: "none", confidence: 0.9, probabilities: { X0001: 0.1, none: 0.9 } },
+      q1_exists: { type: "noul", noul: 0.1 },
     };
     await withClient({ baseUrl: mock.url }, async (client) => {
       const body = payload(await client.callTool({ name: "jev_extract", arguments: { text: "port 8080", question: "Which timeout?", kind: "number" } }));
@@ -241,7 +297,7 @@ test("windowed tools accept a file larger than one request, split into windows",
   const mock = await startMock();
   try {
     await withClient({ baseUrl: mock.url, env: { JEV_FILE_ROOTS: root, JEV_MAX_STATE_CHARS: "100" } }, async (client) => {
-      const result = await client.callTool({ name: "jev_locate", arguments: { path: "big.log", question: "q" } });
+      const result = await client.callTool({ name: "jev_locate", arguments: { path: "big.log", questions: ["q"] } });
       assert.notEqual(result.isError, true, JSON.stringify(result.content));
       assert.ok(payload(result).windows > 1);
       assert.ok(mock.requests.every((r) => r.body.state.length <= 100), "each request stays within the per-request limit");
@@ -283,7 +339,7 @@ test("jev_search honours .gitignore and .ignore, nested and negated, like git", 
   const mock = await startMock();
   try {
     await withClient({ baseUrl: mock.url, env: { JEV_FILE_ROOTS: root } }, async (client) => {
-      await client.callTool({ name: "jev_search", arguments: { question: "q" } });
+      await client.callTool({ name: "jev_search", arguments: { questions: ["q"] } });
       assert.deepEqual(sentPaths(mock), ["docs/readme.md", "gen/w.ts", "keep.log", "src/build-out/y.ts", "src/main.ts"]);
     });
   } finally {
@@ -296,7 +352,7 @@ test("jev_search applies ignore files from parent directories", async () => {
   const mock = await startMock();
   try {
     await withClient({ baseUrl: mock.url, env: { JEV_FILE_ROOTS: root } }, async (client) => {
-      await client.callTool({ name: "jev_search", arguments: { question: "q", dir: "src" } });
+      await client.callTool({ name: "jev_search", arguments: { questions: ["q"], dir: "src" } });
       assert.deepEqual(sentPaths(mock), ["src/build-out/y.ts", "src/main.ts"]);
     });
   } finally {
@@ -309,7 +365,7 @@ test("jev_search refuses a directory outside the roots", async () => {
   const mock = await startMock();
   try {
     await withClient({ baseUrl: mock.url, env: { JEV_FILE_ROOTS: root } }, async (client) => {
-      const result = await client.callTool({ name: "jev_search", arguments: { question: "q", dir: "/etc" } });
+      const result = await client.callTool({ name: "jev_search", arguments: { questions: ["q"], dir: "/etc" } });
       assert.equal(result.isError, true);
       assert.match(payload(result).error.message, /outside the allowed roots/);
     });
@@ -323,7 +379,7 @@ test("jev_search says to install ripgrep when it cannot find rg", async () => {
   const mock = await startMock();
   try {
     await withClient({ baseUrl: mock.url, env: { JEV_FILE_ROOTS: root, JEV_RG_PATH: "/nonexistent/rg" } }, async (client) => {
-      const result = await client.callTool({ name: "jev_search", arguments: { question: "q", pattern: "retr" } });
+      const result = await client.callTool({ name: "jev_search", arguments: { questions: ["q"], pattern: "retr" } });
       assert.equal(result.isError, true);
       assert.match(payload(result).error.message, /ripgrep/);
     });
@@ -337,7 +393,7 @@ test("jev_search never reads an ignored file", async () => {
   const mock = await startMock();
   try {
     await withClient({ baseUrl: mock.url, env: { JEV_FILE_ROOTS: root } }, async (client) => {
-      const body = payload(await client.callTool({ name: "jev_search", arguments: { question: "q", pattern: "IGNORED_MARK|main" } }));
+      const body = payload(await client.callTool({ name: "jev_search", arguments: { questions: ["q"], pattern: "IGNORED_MARK|main" } }));
       assert.equal(body.candidates, 1);
       assert.ok(!mock.only().state.includes("IGNORED_MARK"));
     });

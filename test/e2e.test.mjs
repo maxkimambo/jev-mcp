@@ -122,13 +122,13 @@ test("locate finds the line that sets the default timeout in a real source file"
       const body = payload(
         await client.callTool({
           name: "jev_locate",
-          arguments: { path: "src/lib.ts", question: "Which line sets the default request timeout in milliseconds?", top: 3 },
+          arguments: { path: "src/lib.ts", questions: ["Which line sets the default request timeout in milliseconds?"], top: 3 },
         }),
       );
       assert.ok(body.windows >= 2, "lib.ts is long enough to need several windows");
       assert.ok(
-        body.lines.map((l) => l.line).includes(expected),
-        `expected line ${expected} in the top 3, got ${JSON.stringify(body.lines)}`,
+        body.results[0].lines.map((l) => l.line).includes(expected),
+        `expected line ${expected} in the top 3, got ${JSON.stringify(body.results[0].lines)}`,
       );
     },
     { JEV_FILE_ROOTS: REPO, JEV_LEDGER: ledger },
@@ -138,22 +138,30 @@ test("locate finds the line that sets the default timeout in a real source file"
   assert.ok(entry.input_tokens > 0 && entry.cost > 0);
 });
 
-test("search finds where the default timeout is defined across src/", options, async () => {
+test("search answers a batch of questions in one pass across src/", options, async () => {
   const lines = readFileSync(join(REPO, "src", "lib.ts"), "utf8").split("\n");
-  const expected = lines.findIndex((l) => l.startsWith("export const DEFAULT_TIMEOUT_MS")) + 1;
+  const lineOf = (prefix) => lines.findIndex((l) => l.startsWith(prefix)) + 1;
+  const expected = [lineOf("export const DEFAULT_TIMEOUT_MS"), lineOf("export const DEFAULT_MAX_RETRIES")];
   await live(
     async (client) => {
       const body = payload(
         await client.callTool({
           name: "jev_search",
-          arguments: { dir: "src", pattern: "timeout", question: "Where is the default request timeout value defined?", top: 3 },
+          arguments: {
+            dir: "src",
+            pattern: "timeout|retr",
+            questions: ["Where is the default request timeout value defined?", "Where is the default number of retries defined?"],
+            top: 3,
+          },
         }),
       );
       assert.ok(body.candidates > 5, "the pattern leaves several candidates for Jev to judge");
-      assert.ok(
-        body.hits.some((h) => h.path === "src/lib.ts" && h.line === expected),
-        `expected src/lib.ts:${expected} in the top 3, got ${JSON.stringify(body.hits.map((h) => `${h.path}:${h.line}`))}`,
-      );
+      body.results.forEach((result, i) => {
+        assert.ok(
+          result.hits.some((h) => h.path === "src/lib.ts" && h.line === expected[i]),
+          `${result.question}: expected src/lib.ts:${expected[i]} in the top 3, got ${JSON.stringify(result.hits.map((h) => `${h.path}:${h.line}`))}`,
+        );
+      });
     },
     { JEV_FILE_ROOTS: REPO },
   );
