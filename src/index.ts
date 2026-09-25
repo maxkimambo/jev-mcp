@@ -272,7 +272,7 @@ const model = () => {
  */
 function ok<T extends Record<string, unknown>>(payload: T) {
   return {
-    content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }],
+    content: [{ type: "text" as const, text: JSON.stringify(payload) }],
     structuredContent: payload,
   };
 }
@@ -281,7 +281,7 @@ function fail(error: unknown) {
   const described = describeError(error);
   return {
     isError: true,
-    content: [{ type: "text" as const, text: JSON.stringify({ error: described }, null, 2) }],
+    content: [{ type: "text" as const, text: JSON.stringify({ error: described }) }],
   };
 }
 

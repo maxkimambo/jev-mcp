@@ -105,6 +105,18 @@ test("jev_rank_pages answers with sentences, not whole lines, when a page puts p
   }
 });
 
+test("tool results are compact JSON, since every indent costs the agent context", async () => {
+  const mock = await startMock();
+  try {
+    await withClient({ baseUrl: mock.url }, async (client) => {
+      const result = await client.callTool({ name: "jev_check", arguments: { state: "s", question: "q" } });
+      assert.ok(!result.content[0].text.includes("\n"), result.content[0].text.slice(0, 80));
+    });
+  } finally {
+    await mock.close();
+  }
+});
+
 test("jev_rank_pages withholds the lines of a page that tries to steer the agent", async () => {
   const pages = await site();
   const mock = await startMock();
