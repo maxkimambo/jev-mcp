@@ -6,7 +6,8 @@ description: >
   whole, instead of reading a pile of grep matches, when you need one value from a
   file (port, version, URL, date, setting), before reading a fetched page, issue or
   email, and when the same judgment repeats across many items. Only while jev is on
-  (`/jev:jev on`); the tools refuse while it is off.
+  (`/jev:jev on` in Claude Code, `/jev on` in pi, `jev on` in a terminal); the tools
+  refuse while it is off.
 ---
 
 # Jev reads, you decide
@@ -16,8 +17,9 @@ probabilities, never prose. Its job here is to read the bulk text you would othe
 pull into your context and hand you back line numbers, a value, a pick, or a verdict.
 You then read only what that points at, and do the reasoning yourself.
 
-The tools are `mcp__plugin_jev_jev__jev_*`. If they are deferred, load them with
-ToolSearch `jev`. A `disabled` error means the user switched jev off: carry on
+The tools are the `jev_*` tools: `mcp__plugin_jev_jev__jev_*` in Claude Code (if they
+are deferred, load them with ToolSearch `jev`), prefixed with the server name `jev` in
+Codex, and plain `jev_*` in pi. A `disabled` error means the user switched jev off: carry on
 without it and do not ask them to turn it on.
 
 ## Pick the tool
