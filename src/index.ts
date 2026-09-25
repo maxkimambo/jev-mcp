@@ -1280,6 +1280,7 @@ server.registerTool(
 /** Hosts exempt from the public-address rule (an intranet wiki, or tests). */
 const allowHosts = new Set((process.env.JEV_ALLOW_HOSTS ?? "").split(",").map((h) => h.trim()).filter(Boolean));
 const MAX_URLS = 20;
+const MARKITDOWN = process.env.JEV_MARKITDOWN_PATH ?? "markitdown";
 const PAGE_TIMEOUT_MS = 10_000;
 /** Beyond this a page is a book, not an answer; fetch it directly if it is the only lead. */
 const MAX_PAGE_WINDOWS = 4;
@@ -1327,7 +1328,7 @@ server.registerTool(
       const started = performance.now();
       const fetched = await mapLimit(urls, extra.signal, async (url): Promise<Fetched> => {
         try {
-          const page = await fetchPage(url, { allowHosts, signal: AbortSignal.any([extra.signal, AbortSignal.timeout(PAGE_TIMEOUT_MS)]) });
+          const page = await fetchPage(url, { allowHosts, markitdown: MARKITDOWN, signal: AbortSignal.any([extra.signal, AbortSignal.timeout(PAGE_TIMEOUT_MS)]) });
           const chunks = chunkText(page.text, maxStateChars.value);
           if (chunks.length === 0) throw new Error("The page has no text.");
           if (chunks.length > MAX_PAGE_WINDOWS) throw new Error(`The page is too long to judge (${chunks.length} windows); fetch it directly if it is the only lead.`);

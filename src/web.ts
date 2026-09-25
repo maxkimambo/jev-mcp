@@ -5,6 +5,7 @@
  * is checked is what gets connected to, and every redirect is checked again.
  */
 
+import { execFile } from "node:child_process";
 import { lookup as dnsLookup, type LookupAddress } from "node:dns";
 import { request as httpRequest, type IncomingMessage } from "node:http";
 import { request as httpsRequest } from "node:https";
@@ -78,6 +79,8 @@ export interface FetchOptions {
   allowHosts: ReadonlySet<string>;
   signal: AbortSignal;
   maxBytes?: number;
+  /** markitdown binary, for PDF and Office pages. */
+  markitdown?: string;
 }
 
 export interface Page {
@@ -90,6 +93,35 @@ const MAX_REDIRECTS = 5;
 const DEFAULT_MAX_BYTES = 5_000_000;
 const TEXT_TYPES = /^(text\/(markdown|plain|x-markdown)|application\/(json|xml)|text\/xml)$/;
 const HTML_TYPES = /^(text\/html|application\/xhtml\+xml)$/;
+const OFFICE = "application/vnd.openxmlformats-officedocument";
+/** Types markitdown turns into markdown, with the extension it expects. */
+const DOCUMENT_TYPES: Record<string, string> = {
+  "application/pdf": "pdf",
+  [`${OFFICE}.wordprocessingml.document`]: "docx",
+  [`${OFFICE}.presentationml.presentation`]: "pptx",
+  [`${OFFICE}.spreadsheetml.sheet`]: "xlsx",
+};
+const MARKITDOWN_TIMEOUT_MS = 30_000;
+
+/** Convert offline through markitdown's stdin; it never fetches anything itself. */
+function markitdown(bin: string, body: Buffer, type: string, signal: AbortSignal): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = execFile(
+      bin,
+      ["-m", type, "-x", DOCUMENT_TYPES[type]!],
+      { signal, timeout: MARKITDOWN_TIMEOUT_MS, maxBuffer: 50_000_000, encoding: "utf8" },
+      (error, stdout, stderr) => {
+        if (!error) return resolve(stdout);
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          return reject(new Error(`PDF and Office pages need markitdown: uv tool install 'markitdown[pdf,docx,pptx,xlsx]', or set JEV_MARKITDOWN_PATH.`));
+        }
+        reject(new Error(`markitdown could not convert the page: ${stderr.trim().split("\n").pop() || error.message}`));
+      },
+    );
+    child.stdin?.on("error", () => {}); // a converter that exits early closes stdin; its exit code reports why
+    child.stdin?.end(body);
+  });
+}
 
 function guardedLookup(allowHosts: ReadonlySet<string>): LookupFunction {
   return (hostname, options, callback) => {
@@ -167,11 +199,12 @@ export async function fetchPage(href: string, options: FetchOptions): Promise<Pa
       throw new Error(`${url.href} answered HTTP ${status}.`);
     }
     const [type = "", ...params] = (res.headers["content-type"] ?? "").split(";").map((s) => s.trim().toLowerCase());
-    if (!TEXT_TYPES.test(type) && !HTML_TYPES.test(type)) {
+    if (!TEXT_TYPES.test(type) && !HTML_TYPES.test(type) && !DOCUMENT_TYPES[type]) {
       res.resume();
       throw new Error(`${url.href} is ${type || "an unknown type"}, not a text page.`);
     }
     const body = await readBody(res, url.href, options.maxBytes ?? DEFAULT_MAX_BYTES);
+    if (DOCUMENT_TYPES[type]) return { url: url.href, text: await markitdown(options.markitdown ?? "markitdown", body, type, options.signal) };
     const charset = params.find((p) => p.startsWith("charset="))?.slice(8);
     let raw: string;
     try {

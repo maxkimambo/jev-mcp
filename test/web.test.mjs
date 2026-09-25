@@ -4,6 +4,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createServer } from "node:http";
+import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fetchPage, htmlToText, isPublicAddress } from "../dist/web.js";
 
 async function pageServer() {
@@ -16,6 +19,7 @@ async function pageServer() {
       "/html": [200, "text/html", "<html><head><style>p{}</style><script>steal()</script></head><body><h1>Title</h1><p>Tom &amp; Jerry&nbsp;&#39;s page</p><!-- note --></body></html>"],
       "/png": [200, "image/png", "\x89PNG"],
       "/big": [200, "text/plain", "x".repeat(2_000)],
+      "/doc.pdf": [200, "application/pdf", "%PDF-1.4 fake"],
     };
     if (req.url === "/moved") return res.writeHead(302, { location: "/md" }).end();
     if (req.url === "/to-private") return res.writeHead(302, { location: `http://localhost:${port}/md` }).end();
@@ -77,6 +81,33 @@ test("fetchPage never reaches a private address, directly or through a redirect"
     await assert.rejects(fetchPage("https://localhost/", { allowHosts: new Set(), signal: signal() }), /private address/);
     await assert.rejects(fetchPage(`${site.base}/to-private`, { allowHosts: allow, signal: signal() }), /https/, "a redirect is checked like the first URL");
     assert.ok(!site.seen.some((r) => r.url === "/md"), "the redirect target was never fetched");
+  } finally {
+    await site.close();
+  }
+});
+
+/** A stand-in for the markitdown CLI: echoes its arguments and how many bytes it read. */
+function fakeMarkitdown() {
+  const bin = join(mkdtempSync(join(tmpdir(), "jev-md-")), "markitdown");
+  writeFileSync(bin, `#!${process.execPath}\nlet n = 0; process.stdin.on("data", (c) => (n += c.length)).on("end", () => console.log("# converted " + process.argv.slice(2).join(" ") + " from " + n + " bytes"));\n`);
+  chmodSync(bin, 0o755);
+  return bin;
+}
+
+test("fetchPage hands PDF and Office pages to markitdown over stdin", async () => {
+  const site = await pageServer();
+  try {
+    const page = await fetchPage(`${site.base}/doc.pdf`, { allowHosts: allow, signal: signal(), markitdown: fakeMarkitdown() });
+    assert.equal(page.text.trim(), "# converted -m application/pdf -x pdf from 13 bytes");
+  } finally {
+    await site.close();
+  }
+});
+
+test("fetchPage says how to install markitdown when a PDF needs it", async () => {
+  const site = await pageServer();
+  try {
+    await assert.rejects(fetchPage(`${site.base}/doc.pdf`, { allowHosts: allow, signal: signal(), markitdown: "/nonexistent/markitdown" }), /uv tool install/);
   } finally {
     await site.close();
   }
