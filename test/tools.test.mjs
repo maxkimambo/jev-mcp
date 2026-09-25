@@ -9,11 +9,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { payload, startMock, withClient } from "./helpers.mjs";
 
-const TOOLS = ["jev_ask", "jev_check", "jev_classify", "jev_extract", "jev_locate", "jev_models", "jev_score", "jev_screen", "jev_search", "jev_triage"];
+const TOOLS = ["jev_ask", "jev_check", "jev_classify", "jev_extract", "jev_locate", "jev_models", "jev_rank_pages", "jev_score", "jev_screen", "jev_search", "jev_triage"];
 
 // ── Contract ────────────────────────────────────────────────────────────────
 
-test("advertises exactly the ten judgment tools", async () => {
+test("advertises exactly the eleven judgment tools", async () => {
   await withClient({ withKey: false }, async (client) => {
     const { tools } = await client.listTools();
     assert.deepEqual(tools.map((t) => t.name).sort(), TOOLS);

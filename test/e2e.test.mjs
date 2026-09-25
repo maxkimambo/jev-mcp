@@ -188,6 +188,35 @@ test("extract pulls two values out of a source file in one batch", options, asyn
   );
 });
 
+test("rank_pages picks the page that answers each question from a set of search results", options, async () => {
+  const pages = {
+    citation: "https://docs.typesafe.ai/cookbooks/citation_check",
+    parallel: "https://docs.typesafe.ai/cookbooks/parallel_questions",
+    plugins: "https://code.claude.com/docs/en/plugins",
+  };
+  await live(async (client) => {
+    const body = payload(
+      await client.callTool({
+        name: "jev_rank_pages",
+        arguments: {
+          urls: Object.values(pages),
+          questions: [
+            "What confidence threshold should auto-accept a citation verdict?",
+            "How much cheaper is one batched request than separate requests per question?",
+            "How do I add an MCP server to a Claude Code plugin?",
+          ],
+        },
+      }),
+    );
+    assert.ok(body.pages.every((p) => !p.error), JSON.stringify(body.pages));
+    assert.deepEqual(
+      body.results.map((r) => r.pages[0].url),
+      [pages.citation, pages.parallel, pages.plugins],
+      JSON.stringify(body.results.map((r) => r.pages.map((p) => `${p.url.split("/").pop()} ${p.probability}`))),
+    );
+  });
+});
+
 test("screen flags a prompt injection and passes ordinary instructions", options, async () => {
   await live(async (client) => {
     const attack = payload(
