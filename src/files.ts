@@ -12,6 +12,7 @@
  *  5. No error message ever carries file contents.
  */
 
+import { readFileSync } from "node:fs";
 import { open, realpath, stat } from "node:fs/promises";
 import { delimiter, isAbsolute, normalize, relative, resolve, sep } from "node:path";
 import { FileAccessError } from "./lib.js";
@@ -23,23 +24,48 @@ export interface ParsedRoots {
 }
 
 /**
- * Parse `JEV_FILE_ROOTS`.
+ * Parse `JEV_FILE_ROOTS`, then add the `extra` roots from the roots file.
  *
  * Unset or empty means the working directory the server was started in. The
- * literal `off` disables `path` items entirely. Otherwise a `path.delimiter`
- * separated list of absolute directories; any relative entry rejects the whole
- * value and falls back to the working directory, with a warning.
+ * literal `off` disables `path` items entirely, extra roots included. Otherwise a
+ * `path.delimiter` separated list of absolute directories; any relative entry
+ * rejects the whole value and falls back to the working directory, with a warning.
  */
-export function parseRoots(raw: string | undefined, cwd: string): ParsedRoots {
+export function parseRoots(raw: string | undefined, cwd: string, extra: readonly string[] = []): ParsedRoots {
   const trimmed = raw?.trim() ?? "";
-  if (trimmed === "") return { roots: [cwd] };
+  if (trimmed === "") return { roots: [cwd, ...extra] };
   if (trimmed.toLowerCase() === "off") return { roots: [] };
   const entries = trimmed.split(delimiter).map((e) => e.trim()).filter((e) => e.length > 0);
   const relativeEntry = entries.find((e) => !isAbsolute(e));
   if (relativeEntry !== undefined) {
-    return { roots: [cwd], warning: `JEV_FILE_ROOTS entries must be absolute; got ${JSON.stringify(relativeEntry)}. Using the working directory ${cwd}.` };
+    return { roots: [cwd, ...extra], warning: `JEV_FILE_ROOTS entries must be absolute; got ${JSON.stringify(relativeEntry)}. Using the working directory ${cwd}.` };
   }
-  return { roots: entries.map((e) => normalize(e)) };
+  return { roots: [...entries.map((e) => normalize(e)), ...extra] };
+}
+
+/**
+ * Read the roots file: one directory per line, `~` for home, `#` for comments.
+ * It lets a session started anywhere, such as a scratch folder, read the
+ * projects listed there. A missing file adds nothing; relative entries are
+ * skipped with a warning.
+ */
+export function readRootsFile(path: string, home: string): ParsedRoots {
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch {
+    return { roots: [] };
+  }
+  const entries = text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line !== "" && !line.startsWith("#"))
+    .map((line) => line.replace(/^~(?=\/|$)/, home));
+  const relativeEntries = entries.filter((e) => !isAbsolute(e));
+  return {
+    roots: entries.filter((e) => isAbsolute(e)).map((e) => resolve(e)),
+    ...(relativeEntries.length > 0 && { warning: `${path}: entries must be absolute or start with ~/; skipped ${relativeEntries.map((e) => JSON.stringify(e)).join(", ")}.` }),
+  };
 }
 
 /** True when `target` sits strictly below `root`. The root itself never qualifies. */
@@ -83,7 +109,8 @@ export interface ReadOptions {
   isDenied?: (path: string) => boolean;
 }
 
-const OUTSIDE_HINT = "Only files below JEV_FILE_ROOTS (default: the server's working directory) can be read. Pass the content as text if you have already read it.";
+const OUTSIDE_HINT =
+  "Only files below the server's working directory, JEV_FILE_ROOTS if set, and the directories listed in ~/.config/jev/roots can be read. Pass the content as text if you have already read it, or ask the user to add the directory to ~/.config/jev/roots.";
 
 /**
  * Read a text file for judgment.

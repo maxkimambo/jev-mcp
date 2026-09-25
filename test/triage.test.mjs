@@ -182,6 +182,23 @@ test("the server's own key file is refused even when it sits inside a root", asy
   }
 });
 
+test("directories in the roots file can be read from a session started anywhere else", async () => {
+  const { base, root } = fixture();
+  const config = join(base, "config");
+  mkdirSync(join(config, "jev"), { recursive: true });
+  writeFileSync(join(config, "jev", "roots"), `# my projects\n${root}\n`);
+  const mock = await startMock();
+  try {
+    await withClient({ baseUrl: mock.url, env: { XDG_CONFIG_HOME: config } }, async (client) => {
+      const body = payload(await client.callTool({ name: "jev_triage", arguments: { query: "q", items: [{ id: "a", path: join(root, "a.md") }] } }));
+      assert.equal(body.results[0].error, undefined, JSON.stringify(body.results[0].error));
+      assert.deepEqual(body.file_roots, [process.cwd(), root], "the working directory, then the roots file");
+    });
+  } finally {
+    await mock.close();
+  }
+});
+
 test("JEV_FILE_ROOTS=off disables path items but leaves text items working", async () => {
   const { root } = fixture();
   const mock = await startMock();

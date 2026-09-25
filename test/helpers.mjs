@@ -118,6 +118,8 @@ export async function withClient({ baseUrl, withKey = true, env = {} } = {}, fn)
     PATH: process.env.PATH,
     HOME: process.env.HOME,
     JEV_KEY_FILE: "/nonexistent/jev-mcp-test/key",
+    // Likewise a real ~/.config/jev/roots must not widen what the suite can read.
+    XDG_CONFIG_HOME: "/nonexistent/jev-mcp-test/config",
     // Converters installed on this machine must not change what the suite sees.
     JEV_MARKITDOWN_PATH: "/nonexistent/jev-mcp-test/markitdown",
     JEV_TRAFILATURA_PATH: "/nonexistent/jev-mcp-test/trafilatura",

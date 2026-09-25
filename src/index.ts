@@ -32,7 +32,7 @@ import { z } from "zod";
 import { readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { isDeniedPath, parseRoots, readTextFile, resolveSearchDir } from "./files.js";
+import { isDeniedPath, parseRoots, readRootsFile, readTextFile, resolveSearchDir } from "./files.js";
 import { ripgrep } from "./rg.js";
 import { fetchPage, type Page } from "./web.js";
 import { appendLedger, isSwitchedOn } from "./ops.js";
@@ -113,11 +113,14 @@ const maxRetries = (() => {
   if (Number.isInteger(parsed) && parsed >= 0) return { value: parsed };
   return { value: DEFAULT_MAX_RETRIES, warning: `JEV_MAX_RETRIES must be a whole number ≥ 0; got ${JSON.stringify(raw)}. Using ${DEFAULT_MAX_RETRIES}.` };
 })();
-const fileRoots = parseRoots(process.env.JEV_FILE_ROOTS, process.cwd());
+/** Where the key and the roots file live. */
+const CONFIG_DIR = join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "jev");
+const rootsFile = readRootsFile(join(CONFIG_DIR, "roots"), homedir());
+const fileRoots = parseRoots(process.env.JEV_FILE_ROOTS, process.cwd(), rootsFile.roots);
 const SWITCH_FILE = process.env.JEV_SWITCH_FILE?.trim() || undefined;
 const RG_PATH = process.env.JEV_RG_PATH?.trim() || "rg";
 const LEDGER_FILE = process.env.JEV_LEDGER?.trim() || undefined;
-for (const setting of [timeout, maxRetries, maxQuestions, maxStateChars, maxItems, concurrency, fileRoots]) {
+for (const setting of [timeout, maxRetries, maxQuestions, maxStateChars, maxItems, concurrency, rootsFile, fileRoots]) {
   if (setting.warning) console.error(`[jev-mcp] ${setting.warning}`);
 }
 
@@ -190,8 +193,7 @@ let provider: Provider | undefined;
  * `~/.claude.json`, out of argv, and out of any repository. As with ssh, a file
  * that someone else owns or others can read is refused rather than used.
  */
-const KEY_FILE =
-  process.env.JEV_KEY_FILE ?? join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "jev", "api_key");
+const KEY_FILE = process.env.JEV_KEY_FILE ?? join(CONFIG_DIR, "api_key");
 
 /** The key, the reason the file cannot be used, or undefined when there is none. */
 function readKeyFile(): string | Error | undefined {

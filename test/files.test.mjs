@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
-import { isDeniedPath, isWithinRoot, parseRoots, readTextFile } from "../dist/files.js";
+import { isDeniedPath, isWithinRoot, parseRoots, readRootsFile, readTextFile } from "../dist/files.js";
 import { FileAccessError } from "../dist/lib.js";
 
 test("parseRoots defaults to the working directory, honours 'off', and rejects relative entries", () => {
@@ -17,6 +17,21 @@ test("parseRoots defaults to the working directory, honours 'off', and rejects r
   const bad = parseRoots(["/a", "relative"].join(delimiter), "/work");
   assert.deepEqual(bad.roots, ["/work"]);
   assert.match(bad.warning, /absolute/);
+});
+
+test("parseRoots adds the roots file's directories to the default, but 'off' still means off", () => {
+  assert.deepEqual(parseRoots(undefined, "/work", ["/home/me/dev"]).roots, ["/work", "/home/me/dev"]);
+  assert.deepEqual(parseRoots("/a", "/work", ["/home/me/dev"]).roots, ["/a", "/home/me/dev"]);
+  assert.deepEqual(parseRoots("off", "/work", ["/home/me/dev"]).roots, []);
+});
+
+test("readRootsFile reads one directory per line, expands ~, skips comments and warns on relative entries", () => {
+  const dir = mkdtempSync(join(tmpdir(), "jev-roots-"));
+  assert.deepEqual(readRootsFile(join(dir, "missing"), "/home/me"), { roots: [] }, "no file, no extra roots");
+  writeFileSync(join(dir, "roots"), "# projects\n~/dev\n\n  /opt/src  \nrelative/x\n~\n");
+  const parsed = readRootsFile(join(dir, "roots"), "/home/me");
+  assert.deepEqual(parsed.roots, ["/home/me/dev", "/opt/src", "/home/me"]);
+  assert.match(parsed.warning, /absolute.*"relative\/x"/);
 });
 
 test("isWithinRoot admits descendants only, never the root itself or a sibling", () => {
