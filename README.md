@@ -132,7 +132,10 @@ OpenRouter key to plugin servers, so the key file is the dependable route.
 
 `jev_rank_pages` fetches up to 20 URLs server-side, all at once. Jev ranks the pages per
 question and checks each for injection in the same request, then picks up to five
-sentences from each question's best page. Those sentences are the only page text that
+sentences from each question's best page, dropping any Jev gives almost no weight, so
+page furniture such as "Bibliographic Tools" does not pad the answer. It answers from the
+best page, not from each page: to summarise every result, WebFetch each with a prompt
+instead. Those sentences are the only page text that
 comes back, and a page that looks like it tries to steer an agent has its sentences
 withheld. It only fetches https, and refuses any host that resolves to a private, loopback or
 link-local address, checked on the connection itself and again on every redirect, so
@@ -211,7 +214,16 @@ File reads are confined:
 - A path must sit **below an allowed root**. The default root is the directory the
   server was started in; set `JEV_FILE_ROOTS` to a `path.delimiter`-separated list
   of absolute directories, or to `off` to refuse every `path` item. Relative paths
-  resolve against the first root. Containment is checked before and after symlinks
+  resolve against the first root.
+- **`~/.config/jev/roots`** adds directories to those, one per line, `~` for home and
+  `#` for comments, so a session started in a scratch folder can still read your
+  projects. `off` still turns every root off. It is read when the server starts:
+  restart Claude Code after editing it.
+
+  ```
+  # projects Jev may read
+  ~/dev/github.com
+  ``` Containment is checked before and after symlinks
   are resolved, so a link cannot walk out.
 - **Credential files are refused** by name wherever they sit: `.env*`, `.ssh`,
   `.aws`, `.gnupg`, `*.pem`, `*.key`, `id_rsa`, `credentials.json`, the server's own
@@ -315,7 +327,7 @@ answer: which tool replaces which read, how to phrase the question, and how to a
 | `JEV_MAX_STATE_CHARS` | Largest state accepted, per item for `jev_triage`. Defaults to 200000. |
 | `JEV_MAX_ITEMS` | Items per `jev_triage` call, `paths` per `jev_ask`, windows per `jev_locate`. Defaults to 50. |
 | `JEV_CONCURRENCY` | Parallel requests within one `jev_triage` call. Defaults to 4, capped at 16. |
-| `JEV_FILE_ROOTS` | Directories `jev_triage`, `jev_ask` `paths` and `jev_locate` may read below. Defaults to the working directory; `off` disables file reads. |
+| `JEV_FILE_ROOTS` | Directories `jev_triage`, `jev_ask` `paths` and `jev_locate` may read below. Defaults to the working directory; `off` disables file reads. `$XDG_CONFIG_HOME/jev/roots` adds more. |
 | `JEV_RG_PATH` | ripgrep binary for `jev_search`. Defaults to `rg` on PATH. |
 | `JEV_TRAFILATURA_PATH` | trafilatura binary for HTML pages in `jev_rank_pages`. Defaults to `trafilatura` on PATH; without it pages are reduced to plain text. |
 | `JEV_MARKITDOWN_PATH` | markitdown binary for PDF and Office pages in `jev_rank_pages`. Defaults to `markitdown` on PATH. |
