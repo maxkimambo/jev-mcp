@@ -9,7 +9,7 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "Grep|Read|Bash|mcp__plugin_jev_jev__.*",
+        "matcher": "Grep|Read|Bash|WebSearch|WebFetch|mcp__plugin_jev_jev__.*",
         "hooks": [
           { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/cli.js\" tool-hook", "timeout": 3 }
         ]

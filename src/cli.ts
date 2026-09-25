@@ -18,7 +18,10 @@ import { isSwitchedOn } from "./ops.js";
 const HOME = process.env.JEV_HOME ?? join(homedir(), ".claude", "jev-think");
 const SWITCH = join(HOME, "state.json");
 const LEDGER = join(HOME, "ledger.jsonl");
-/** One marker per session: present from a prompt until its first search or jev call. */
+/**
+ * One marker per session, present from a prompt until its first search or jev
+ * call, and a `.web` marker from a WebSearch until the next WebFetch.
+ */
 const TURNS = join(HOME, "turns");
 
 /** Whole-file reads above this size are worth a nudge; roughly 400 lines of code. */
@@ -37,6 +40,10 @@ const PROMPT_CONTEXT =
 const SEARCH_REFUSAL =
   `jev is ON, so the first search of a turn goes to jev_search (${TOOLS}): pass dir, this pattern made broad, and every question you have as questions (batch them: extra questions cost almost nothing). ` +
   "It returns only the best path:line hits. If jev fails or you need an exact-string match, run this search again; it will be allowed."
+
+const WEB_REFUSAL =
+  `jev is ON: before fetching search results, pass all their URLs and every question you have to jev_rank_pages (${TOOLS}). ` +
+  "It fetches the pages itself and returns which page answers each question; then WebFetch only that page. If jev fails, fetch again; it will be allowed."
 
 const READ_CONTEXT =
   "jev is ON and this is a large file read whole: if you only need part of it, jev_locate returns the lines that answer your question, " +
@@ -62,6 +69,7 @@ function promptHook(raw: string) {
   if (!marker) return;
   mkdirSync(TURNS, { recursive: true });
   writeFileSync(marker, "");
+  rmSync(`${marker}.web`, { force: true });
 }
 
 function toolHook(raw: string) {
@@ -69,7 +77,15 @@ function toolHook(raw: string) {
   const input = event.tool_input ?? {};
   const marker = turnMarker(event.session_id);
   if (event.tool_name?.startsWith("mcp__plugin_jev_jev__")) {
-    if (marker) rmSync(marker, { force: true });
+    if (!marker) return;
+    rmSync(marker, { force: true });
+    rmSync(`${marker}.web`, { force: true });
+  } else if (event.tool_name === "WebSearch") {
+    if (marker && existsSync(TURNS)) writeFileSync(`${marker}.web`, "");
+  } else if (event.tool_name === "WebFetch") {
+    if (!marker || !existsSync(`${marker}.web`)) return;
+    rmSync(`${marker}.web`);
+    emit({ hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: WEB_REFUSAL });
   } else if (event.tool_name === "Grep" || (event.tool_name === "Bash" && SEARCH_COMMAND.test(input.command ?? ""))) {
     if (!marker || !existsSync(marker)) return;
     rmSync(marker);

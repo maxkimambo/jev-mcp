@@ -102,6 +102,31 @@ test("a jev call before searching lifts the refusal, and a session id never leav
   assert.ok(!existsSync(join(h, "..", "..", "escape")));
 });
 
+test("after a web search, the first WebFetch is refused toward jev_rank_pages", () => {
+  const h = home();
+  run(h, ["on"]);
+  const session = "web-1";
+  const search = { session_id: session, tool_name: "WebSearch", tool_input: { query: "jev batching" } };
+  const fetch = { session_id: session, tool_name: "WebFetch", tool_input: { url: "https://example.com", prompt: "p" } };
+
+  hook(h, "prompt-hook", { session_id: session });
+  assert.equal(hook(h, "tool-hook", fetch), undefined, "a URL the user gave is fetched without a detour");
+
+  assert.equal(hook(h, "tool-hook", search), undefined, "the search itself runs");
+  const out = hook(h, "tool-hook", fetch);
+  assert.equal(out.permissionDecision, "deny");
+  assert.match(out.permissionDecisionReason, /jev_rank_pages/);
+  assert.equal(hook(h, "tool-hook", fetch), undefined, "the retry runs");
+
+  hook(h, "tool-hook", search);
+  hook(h, "tool-hook", { session_id: session, tool_name: "mcp__plugin_jev_jev__jev_rank_pages", tool_input: {} });
+  assert.equal(hook(h, "tool-hook", fetch), undefined, "ranking first lifts the refusal");
+
+  hook(h, "tool-hook", search);
+  hook(h, "prompt-hook", { session_id: session });
+  assert.equal(hook(h, "tool-hook", fetch), undefined, "a search from an earlier turn does not carry over");
+});
+
 test("the tool hook nudges big whole-file reads and leaves other tools alone", () => {
   const h = home();
   const big = join(h, "big.log");
