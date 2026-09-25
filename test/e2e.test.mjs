@@ -167,16 +167,22 @@ test("search answers a batch of questions in one pass across src/", options, asy
   );
 });
 
-test("extract pulls the default timeout value out of a source file", options, async () => {
+test("extract pulls two values out of a source file in one batch", options, async () => {
   await live(
     async (client) => {
       const body = payload(
         await client.callTool({
           name: "jev_extract",
-          arguments: { path: "src/lib.ts", kind: "number", question: "What is the default request timeout in milliseconds?" },
+          arguments: {
+            path: "src/lib.ts",
+            questions: [
+              { kind: "number", question: "What is the default request timeout in milliseconds?" },
+              { kind: "number", question: "What is the default number of retries after a failed attempt?" },
+            ],
+          },
         }),
       );
-      assert.equal(body.value, "5_000", JSON.stringify({ value: body.value, alternatives: body.alternatives }));
+      assert.deepEqual(body.results.map((r) => r.value), ["5_000", "0"], JSON.stringify(body.results.map(({ value, alternatives }) => ({ value, alternatives }))));
     },
     { JEV_FILE_ROOTS: REPO },
   );

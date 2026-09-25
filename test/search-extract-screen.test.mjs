@@ -190,34 +190,66 @@ test("jev_extract offers only regex-found values and returns the chosen one verb
     await withClient({ baseUrl: mock.url, env: { JEV_FILE_ROOTS: root } }, async (client) => {
       const result = await client.callTool({
         name: "jev_extract",
-        arguments: { path: "README.md", question: "Which URL is the documentation?", kind: "url" },
+        arguments: { path: "README.md", questions: [{ question: "Which URL is the documentation?", kind: "url" }] },
       });
       assert.notEqual(result.isError, true, JSON.stringify(result.content));
       const sent = mock.only();
-      assert.deepEqual(Object.values(sent.questions.q1_where.criteria).slice(0, 2).map((d) => d.split(" (line")[0]), [
-        "https://example.com/docs",
-        "https://example.com/api.",
-      ].map((u) => u.replace(/\.$/, "")));
-      const body = payload(result);
-      assert.equal(body.value, "https://example.com/docs");
-      assert.equal(body.line, 3);
-      assert.equal(body.action, "act");
-      assert.equal(body.found, "yes");
-      assert.equal(body.candidates, 2);
+      assert.deepEqual(Object.values(sent.questions.q1_where.criteria).slice(0, 2).map((d) => d.split(" (line")[0]), ["https://example.com/docs", "https://example.com/api"]);
+      const [answer] = payload(result).results;
+      assert.equal(answer.question, "Which URL is the documentation?");
+      assert.equal(answer.value, "https://example.com/docs");
+      assert.equal(answer.line, 3);
+      assert.equal(answer.action, "act");
+      assert.equal(answer.found, "yes");
+      assert.equal(answer.candidates, 2);
     });
   } finally {
     await mock.close();
   }
 });
 
-test("jev_extract with no candidates of that kind answers null without calling the API", async () => {
+test("jev_extract batches values of different kinds from one file into one request", async () => {
+  const root = repo();
+  const mock = await startMock();
+  try {
+    mock.state.noul = 0.95;
+    await withClient({ baseUrl: mock.url, env: { JEV_FILE_ROOTS: root } }, async (client) => {
+      const questions = [
+        { question: "Which URL is the documentation?", kind: "url" },
+        { question: "Which version is the app?", kind: "version" },
+        { question: "Which mode is set?", kind: "quoted" },
+      ];
+      const body = payload(await client.callTool({ name: "jev_extract", arguments: { path: "README.md", questions } }));
+      const sent = mock.only();
+      assert.deepEqual(Object.keys(sent.questions), ["q1_where", "q1_exists", "q2_where", "q2_exists", "q3_where", "q3_exists"]);
+      assert.match(Object.values(sent.questions.q2_where.criteria)[0], /^2\.4\.1 \(line 2\)/, "each question gets candidates of its own kind");
+      assert.deepEqual(body.results.map((r) => [r.question, r.value]), [
+        ["Which URL is the documentation?", "https://example.com/docs"],
+        ["Which version is the app?", "2.4.1"],
+        ["Which mode is set?", "strict"],
+      ]);
+      assert.equal(body.windows, 1);
+    });
+  } finally {
+    await mock.close();
+  }
+});
+
+test("jev_extract answers null for a kind with no candidates and asks only about the rest", async () => {
   const mock = await startMock();
   try {
     await withClient({ baseUrl: mock.url }, async (client) => {
-      const body = payload(await client.callTool({ name: "jev_extract", arguments: { text: "no links here", question: "q", kind: "url" } }));
-      assert.equal(body.value, null);
-      assert.equal(body.found, "no");
-      assert.equal(mock.requests.length, 0);
+      let body = payload(await client.callTool({ name: "jev_extract", arguments: { text: "no links here", questions: [{ question: "q", kind: "url" }] } }));
+      assert.equal(body.results[0].value, null);
+      assert.equal(body.results[0].found, "no");
+      assert.equal(mock.requests.length, 0, "nothing to choose from means no request");
+
+      body = payload(
+        await client.callTool({ name: "jev_extract", arguments: { text: "port 8080", questions: [{ question: "Which URL?", kind: "url" }, { question: "Which port?", kind: "number" }] } }),
+      );
+      assert.deepEqual(Object.keys(mock.only().questions), ["q2_where", "q2_exists"]);
+      assert.equal(body.results[0].value, null);
+      assert.equal(body.results[1].value, "8080");
     });
   } finally {
     await mock.close();
@@ -232,9 +264,9 @@ test("jev_extract returns null when Jev picks the no-match option", async () => 
       q1_exists: { type: "noul", noul: 0.1 },
     };
     await withClient({ baseUrl: mock.url }, async (client) => {
-      const body = payload(await client.callTool({ name: "jev_extract", arguments: { text: "port 8080", question: "Which timeout?", kind: "number" } }));
-      assert.equal(body.value, null);
-      assert.equal(body.found, "no");
+      const body = payload(await client.callTool({ name: "jev_extract", arguments: { text: "port 8080", questions: [{ question: "Which timeout?", kind: "number" }] } }));
+      assert.equal(body.results[0].value, null);
+      assert.equal(body.results[0].found, "no");
     });
   } finally {
     await mock.close();
