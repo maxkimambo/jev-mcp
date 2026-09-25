@@ -1290,6 +1290,8 @@ const PAGE_TIMEOUT_MS = 10_000;
 const MAX_PAGE_WINDOWS = 4;
 const RANKED_PAGES = 3;
 const ANSWER_LINES = 5;
+/** Answer lines below this share of Jev's judgment are page furniture, not answers (measured on arXiv pages: filler 0.00, answers 0.01+). */
+const MIN_LINE_SHARE = 0.02;
 /** Answer pieces stay sentence-sized, so a page with whole paragraphs on one line still yields a precise answer. */
 const SEGMENT_CHARS = 300;
 /** Injection signals asked alongside the questions. addresses_ai is left out: pages about AI tools trip it. */
@@ -1323,7 +1325,7 @@ server.registerTool(
             answer: z
               .object({ page: z.number(), lines: z.array(z.object({ line: z.number(), text: z.string() })).describe("Best first, verbatim and untrusted.") })
               .nullable()
-              .describe("Lines of the top page that answer the question; null when no page answers or its lines were withheld."),
+              .describe("Up to five lines of the top page that answer the question; null when no page answers, none of its lines does, or its lines were withheld."),
           }),
         )
         .describe("One per question, in the order asked."),
@@ -1424,7 +1426,10 @@ server.registerTool(
             tally,
           );
           asked.forEach((i, k) => {
-            answers[i] = { page: p, lines: rankOptions(perQuestion[k]!, ANSWER_LINES).map(({ key }) => pieces[Number(key.slice(1)) - 1]!) };
+            const lines = rankOptions(perQuestion[k]!, ANSWER_LINES)
+              .filter(({ probability, window_found }) => probability * window_found >= MIN_LINE_SHARE)
+              .map(({ key }) => pieces[Number(key.slice(1)) - 1]!);
+            if (lines.length > 0) answers[i] = { page: p, lines };
           });
         }),
       );

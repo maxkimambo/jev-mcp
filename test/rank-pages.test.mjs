@@ -63,7 +63,7 @@ test("jev_rank_pages ranks pages per question and returns the answering lines of
         assert.equal(r.question, questions[i]);
         assert.deepEqual(r.ranking, [{ page: 0, probability: 0.9, found: "yes" }, { page: 1, probability: 0.9, found: "yes" }]);
         assert.equal(r.answer.page, 0);
-        assert.deepEqual(r.answer.lines[0], { line: 1, text: "# Retries" });
+        assert.deepEqual(r.answer.lines, [{ line: 1, text: "# Retries" }, { line: 2, text: "The client retries 3 times with backoff." }]);
       }
     });
   } finally {
@@ -98,6 +98,7 @@ test("jev_rank_pages answers with sentences, not whole lines, when a page puts p
       assert.ok(lines.every((l) => l.length <= 320), "every candidate is sentence-sized");
       assert.deepEqual(out.results[0].answer.lines[0], { line: 1, text: "# Laya" });
       assert.ok(out.results[0].answer.lines.every((l) => l.text.length <= 300));
+      assert.equal(out.results[0].answer.lines.length, 1, "lines Jev gives almost no weight are dropped, not padded out to five");
     });
   } finally {
     await mock.close();
@@ -114,6 +115,23 @@ test("tool results are compact JSON, since every indent costs the agent context"
     });
   } finally {
     await mock.close();
+  }
+});
+
+test("jev_rank_pages gives no answer when the top page ranks but none of its lines answers", async () => {
+  const pages = await site();
+  const mock = await startMock();
+  try {
+    mock.state.noul = 0.9;
+    mock.state.noulById = { ...CLEAN, q1_exists: 0.01 };
+    await withClient({ baseUrl: mock.url, env }, async (client) => {
+      const out = payload(await client.callTool({ name: "jev_rank_pages", arguments: { urls: [`${pages.base}/retries.md`], questions: ["q?"] } }));
+      assert.equal(out.results[0].ranking[0].found, "yes");
+      assert.equal(out.results[0].answer, null);
+    });
+  } finally {
+    await mock.close();
+    await pages.close();
   }
 });
 
