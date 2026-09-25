@@ -23,6 +23,8 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: npm run typecheck
       - run: npm run build
+      # The plugin runs the committed bundle, so it must match the source.
+      - run: git diff --exit-code bundle/
       - run: npm test
 
   audit:
