@@ -34,7 +34,7 @@ const TOOLS = "mcp__plugin_jev_jev__* (load with ToolSearch \"jev\" if deferred)
 const PROMPT_CONTEXT =
   `jev is ON. Before reading piles of text to orient or decide, let Jev read them and read only its answers (${TOOLS}): ` +
   "jev_search for lines across a directory instead of grep/rg (your first grep/rg this turn is refused unless a jev tool ran first), jev_locate for lines in one big file (both take all your questions in one call), " +
-  "jev_ask with paths for questions about a few files, jev_extract for values from a file (all in one call), jev_rank_pages to answer from web search results without fetching them, jev_screen before reading untrusted text. " +
+  "jev_ask with paths for questions about a few files, jev_extract for values from a file (all in one call), jev_rank_pages to find which search result answers a question without fetching them (not to summarise every result: WebFetch with a prompt does that), jev_screen before reading untrusted text. " +
   "Say in one line when Jev saved you a read.";
 
 const SEARCH_REFUSAL =
@@ -43,7 +43,8 @@ const SEARCH_REFUSAL =
 
 const WEB_REFUSAL =
   `jev is ON: before fetching search results, pass all their URLs and every question you have to jev_rank_pages (${TOOLS}). ` +
-  "It fetches the pages itself and returns, per question, the sentences of the best page that answer it; WebFetch only if they are not enough. If jev fails, fetch again; it will be allowed."
+  "It fetches the pages itself and returns, per question, the sentences of the best page that answer it; WebFetch only if they are not enough. " +
+  "It answers from the best page, not from each page: if you need every result summarised, or jev fails, fetch again; it will be allowed."
 
 const READ_CONTEXT =
   "jev is ON and this is a large file read whole: if you only need part of it, jev_locate returns the lines that answer your question, " +

@@ -1307,7 +1307,8 @@ server.registerTool(
     annotations: READ_ONLY,
     description:
       "After a web search, pass every result URL and every question you have. The server fetches the pages itself (https only, never private addresses; markdown when offered, HTML reduced to its main content, PDF and Office via markitdown), and Jev ranks the pages per question and picks the lines of the best page that answer it. " +
-      "Returns, per question, the top pages and those lines verbatim, so you usually need no WebFetch at all; fetch a page only when its lines are not enough. Lines from a page that looks like it tries to steer an agent are withheld.",
+      "Returns, per question, the top pages and those lines verbatim, so you usually need no WebFetch at all; fetch a page only when its lines are not enough. Lines from a page that looks like it tries to steer an agent are withheld. " +
+      "It answers each question from the best page, not from every page: to summarise each result separately (a survey of papers, say), WebFetch each with a prompt instead.",
     inputSchema: {
       urls: z.array(z.string().url()).min(1).max(MAX_URLS).describe(`The candidate pages, e.g. every result of a web search (up to ${MAX_URLS}).`),
       questions: Questions,
