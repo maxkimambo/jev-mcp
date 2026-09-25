@@ -32,6 +32,25 @@ test("every tool documents itself and declares both input and output schemas", a
   });
 });
 
+test("results with a gateway's cost still match the output schema a strict client checks", async () => {
+  const mock = await startMock();
+  try {
+    mock.state.usage = { input_tokens: 10, output_tokens: 2, cost: 0.00001 };
+    await withClient({ baseUrl: mock.url }, async (client) => {
+      await client.listTools(); // the client validates results only against schemas it has listed
+      for (const [name, args] of [
+        ["jev_check", { state: "s", question: "q?" }],
+        ["jev_locate", { text: "a\nb", questions: ["q?"] }],
+      ]) {
+        const result = await client.callTool({ name, arguments: args });
+        assert.equal(payload(result).usage.cost, 0.00001, name);
+      }
+    });
+  } finally {
+    await mock.close();
+  }
+});
+
 test("classify requires caller-supplied options, so the model cannot invent one", async () => {
   await withClient({ withKey: false }, async (client) => {
     const { tools } = await client.listTools();

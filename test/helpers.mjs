@@ -22,7 +22,7 @@ export async function startMock() {
   // can hand the server a malformed response and prove it is rejected.
   // `delayMs` holds each response so a test can observe how many requests are
   // in flight at once; `maxInFlight` records the peak.
-  const state = { confidence: 0.9, noul: 0.5, noulById: {}, status: 200, body: null, answers: null, delayMs: 0, inFlight: 0, maxInFlight: 0 };
+  const state = { usage: { input_tokens: 10, output_tokens: 2 }, confidence: 0.9, noul: 0.5, noulById: {}, status: 200, body: null, answers: null, delayMs: 0, inFlight: 0, maxInFlight: 0 };
 
   const server = createServer((req, res) => {
     let raw = "";
@@ -80,7 +80,7 @@ export async function startMock() {
         }
       }
       res.writeHead(200);
-      res.end(JSON.stringify({ model: "mock-jev", answers: state.answers ?? answers, usage: { input_tokens: 10, output_tokens: 2 } }));
+      res.end(JSON.stringify({ model: "mock-jev", answers: state.answers ?? answers, usage: state.usage }));
     });
   });
 

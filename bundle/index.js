@@ -22895,7 +22895,11 @@ for (const setting of [timeout, maxRetries, maxQuestions, maxStateChars, maxItem
 var StateSchema = external_exports.union([external_exports.string(), external_exports.record(external_exports.any()), external_exports.array(external_exports.any())]).describe("The content to evaluate. A plain string for text, or an object/array for structured data such as a record, a diff, or a chat log.");
 var InstructionSchema = external_exports.union([external_exports.string().min(1), external_exports.record(external_exports.any()), external_exports.array(external_exports.any())]).describe("The judgment to make. A string, or an object/array when the question has several labelled parts. This is the only instruction Jev sees, so state it in full.");
 var DescriptionSchema = external_exports.union([external_exports.string(), external_exports.record(external_exports.any()), external_exports.array(external_exports.any()), external_exports.null()]);
-var UsageSchema = external_exports.object({ input_tokens: external_exports.number(), output_tokens: external_exports.number() });
+var UsageSchema = external_exports.object({
+  input_tokens: external_exports.number(),
+  output_tokens: external_exports.number(),
+  cost: external_exports.number().optional().describe("USD, when the gateway reports it (OpenRouter).")
+});
 var LatencySchema = external_exports.number().describe("Wall-clock milliseconds for the API round trip, for your own calibration logs.");
 var GateSchema = external_exports.enum(["act", "review", "abstain"]);
 var ActAbove = external_exports.number().min(0).max(1).optional().describe("Confidence at or above which the answer is marked 'act'. Default 0.8. Calibrate on your own data and the cost of being wrong.");
