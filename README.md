@@ -126,12 +126,15 @@ OpenRouter key to plugin servers, so the key file is the dependable route.
 | `jev_locate` | Choice + Noul per question, per window | You need the lines of one large file that answer your questions, without reading it |
 | `jev_search` | Choice + Noul per question, per window | You need the lines across a directory that answer your questions, instead of pages of grep hits |
 | `jev_extract` | Choice + Noul per question over regex-found values | You want short values from a file (port, version, URL, date, quoted setting) without reading it |
-| `jev_rank_pages` | one Noul per question, per page window | You have search results and want the page that answers, before fetching any into your context |
+| `jev_rank_pages` | Nouls per question and injection signal per page, then Choice + Noul over the best page's sentences | You have search results and want the answer without fetching pages into your context |
 | `jev_screen` | four Nouls + a code check | You are about to read untrusted text and want to know if it tries to steer you |
 | `jev_models` | — | Confirm the key works and find a model id |
 
-`jev_rank_pages` fetches up to 20 URLs server-side and never returns their text. It
-only fetches https, and refuses any host that resolves to a private, loopback or
+`jev_rank_pages` fetches up to 20 URLs server-side, all at once. Jev ranks the pages per
+question and checks each for injection in the same request, then picks up to five
+sentences from each question's best page. Those sentences are the only page text that
+comes back, and a page that looks like it tries to steer an agent has its sentences
+withheld. It only fetches https, and refuses any host that resolves to a private, loopback or
 link-local address, checked on the connection itself and again on every redirect, so
 a search result cannot point it at your LAN or a cloud metadata endpoint. It asks for
 markdown first (`Accept: text/markdown`), which docs platforms usually serve. HTML goes
