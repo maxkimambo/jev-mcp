@@ -1,6 +1,7 @@
 # jev-mcp
 
-An MCP server that exposes [TypeSafe Jev](https://docs.typesafe.ai) as typed judgment tools.
+Let [TypeSafe Jev](https://docs.typesafe.ai) read files, logs and search results so your
+coding agent reads only the answer. For Claude Code, Codex and pi, or any MCP client.
 
 Jev is a System One model. It returns a typed answer and a calibrated probability
 distribution, never prose. These tools surface that faithfully rather than hiding
@@ -12,9 +13,16 @@ it behind a label.
 curl -fsSL https://raw.githubusercontent.com/maxkimambo/jev-mcp/main/install.sh | sh
 ```
 
-It needs Claude Code and Node 20.12+, and installs or updates everything else:
+It needs Node 20.12+ and sets up every agent it finds on PATH; name agents to choose
+(`curl … | sh -s -- codex pi`). It installs or updates:
 
-- the Claude Code plugin (server, hooks, `/jev:jev` command, skill);
+- **Claude Code:** the plugin (server, hooks, `/jev:jev` command, skill);
+- **Codex:** a checkout in `~/.local/share/jev-mcp`, the server in
+  `~/.codex/config.toml`, the skill in `~/.codex/skills`, and a `jev on|off|status`
+  command, since Codex has no plugin commands;
+- **pi:** the repository as a pi package: a native extension that registers the jev tools
+  and `/jev`, and the skill. pi has no MCP client by design, so the extension starts the
+  server itself;
 - [ripgrep](https://github.com/BurntSushi/ripgrep) for `jev_search`, through Homebrew or uv;
 - [trafilatura](https://github.com/adbar/trafilatura) and
   [markitdown](https://github.com/microsoft/markitdown) for `jev_rank_pages`, through
@@ -23,7 +31,8 @@ It needs Claude Code and Node 20.12+, and installs or updates everything else:
   Get one from [console.typesafe.ai](https://console.typesafe.ai/settings/keys) or
   [OpenRouter](https://openrouter.ai/~typesafe/jev-latest).
 
-Run it again to update. `JEV_SOURCE=/path/to/jev-mcp sh install.sh` installs from a
+All three share one on/off switch and one call ledger, so switching jev on in one agent
+switches it on in all. Run the script again to update. `JEV_SOURCE=/path/to/jev-mcp sh install.sh` installs from a
 checkout instead of GitHub.
 
 ### Claude Code plugin
@@ -57,6 +66,22 @@ Claude Code runs a copy made at install time (`~/.claude/plugins/cache/`), so af
 `make build` (which rebuilds `bundle/`; commit it with the change) bump the version and
 reinstall, or the old build keeps running. The command
 is `/jev:jev on|off|status`; plugin commands are always prefixed with the plugin name.
+
+### pi and Codex by hand
+
+```bash
+pi install git:github.com/maxkimambo/jev-mcp
+```
+
+For Codex, add this to `~/.codex/config.toml`, with the path of a checkout:
+
+```toml
+[mcp_servers.jev]
+command = "node"
+args = ["/absolute/path/to/jev-mcp/bundle/index.js"]
+tool_timeout_sec = 120
+env = { JEV_SWITCH_FILE = "/Users/you/.claude/jev-think/state.json", JEV_LEDGER = "/Users/you/.claude/jev-think/ledger.jsonl" }
+```
 
 ### Any MCP client
 
@@ -398,4 +423,5 @@ in what reaches the model fails the build.
 
 ## License
 
-MIT
+MIT. jev-mcp started from [rashedInt32/jev-mcp](https://github.com/rashedInt32/jev-mcp)
+by Rashed Parvez and has since grown into its own tool set.
