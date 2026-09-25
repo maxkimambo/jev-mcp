@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
-export const SERVER_PATH = fileURLToPath(new URL("../dist/index.js", import.meta.url));
+export const SERVER_PATH = fileURLToPath(new URL("../bundle/index.js", import.meta.url));
 
 /** Name assembled at runtime so scanners don't read this file as a credential. */
 const KEY_VAR = ["TYPESAFE", "API", "KEY"].join("_");

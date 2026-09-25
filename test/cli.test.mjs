@@ -1,4 +1,4 @@
-// dist/cli.js: the plugin's /jev command and its two hooks. Hooks must stay
+// bundle/cli.js: the plugin's /jev command and its two hooks. Hooks must stay
 // silent while switched off and never block a tool call.
 
 import assert from "node:assert/strict";
@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const CLI = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
+const CLI = fileURLToPath(new URL("../bundle/cli.js", import.meta.url));
 
 function home() {
   return mkdtempSync(join(tmpdir(), "jev-home-"));

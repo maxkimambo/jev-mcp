@@ -3,7 +3,7 @@
     "UserPromptSubmit": [
       {
         "hooks": [
-          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/cli.js\" prompt-hook", "timeout": 3 }
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/bundle/cli.js\" prompt-hook", "timeout": 3 }
         ]
       }
     ],
@@ -11,7 +11,7 @@
       {
         "matcher": "Grep|Read|Bash|WebSearch|WebFetch|mcp__plugin_jev_jev__.*",
         "hooks": [
-          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/cli.js\" tool-hook", "timeout": 3 }
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/bundle/cli.js\" tool-hook", "timeout": 3 }
         ]
       }
     ]

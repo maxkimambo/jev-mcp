@@ -50,7 +50,7 @@ is `/jev:jev on|off|status`; plugin commands are always prefixed with the plugin
 ### Any MCP client
 
 ```bash
-claude mcp add --scope user jev -- node /absolute/path/to/jev-mcp/dist/index.js
+claude mcp add --scope user jev -- node /absolute/path/to/jev-mcp/bundle/index.js
 ```
 
 Or in a client's JSON config:
@@ -58,7 +58,7 @@ Or in a client's JSON config:
 ```json
 {
   "mcpServers": {
-    "jev": { "command": "node", "args": ["/absolute/path/to/jev-mcp/dist/index.js"] }
+    "jev": { "command": "node", "args": ["/absolute/path/to/jev-mcp/bundle/index.js"] }
   }
 }
 ```

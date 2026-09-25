@@ -13,9 +13,10 @@
     "url": "https://github.com/rashedInt32/jev-mcp/issues"
   },
   "bin": {
-    "jev-mcp": "dist/index.js"
+    "jev-mcp": "bundle/index.js"
   },
   "files": [
+    "bundle",
     "dist",
     "skills",
     "README.md",
@@ -32,13 +33,14 @@
     "ai"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && npm run bundle",
     "prepare": "npm run build",
     "prepublishOnly": "npm run typecheck && npm test",
-    "start": "node dist/index.js",
+    "start": "node bundle/index.js",
     "typecheck": "tsc --noEmit",
     "test": "node --test test/*.test.mjs",
-    "test:e2e": "node --test test/e2e.test.mjs"
+    "test:e2e": "node --test test/e2e.test.mjs",
+    "bundle": "esbuild src/index.ts src/cli.ts --bundle --platform=node --format=esm --target=node20 --outdir=bundle --log-level=warning --banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\""
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
@@ -47,6 +49,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "esbuild": "^0.25.12",
     "typescript": "^5.6.0"
   },
   "engines": {

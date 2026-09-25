@@ -23,7 +23,7 @@
       "type": "stdio",
       "command": "node",
       "args": [
-        "${CLAUDE_PLUGIN_ROOT}/dist/index.js"
+        "${CLAUDE_PLUGIN_ROOT}/bundle/index.js"
       ],
       "env": {
         "JEV_SWITCH_FILE": "${HOME}/.claude/jev-think/state.json",
