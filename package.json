@@ -1,9 +1,10 @@
 {
   "name": "jev-mcp",
   "version": "0.13.0",
-  "description": "MCP server exposing TypeSafe Jev typed judgments: classify, score, check, a batched multi-question ask, a many-item triage with server-side file reads, and model discovery.",
+  "description": "Let TypeSafe Jev read files, logs and search results so your coding agent reads only the answer. For Claude Code, Codex and pi.",
   "type": "module",
   "license": "MIT",
+  "author": "Max Kimambo",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/maxkimambo/jev-mcp.git"
