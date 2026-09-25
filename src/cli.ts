@@ -29,12 +29,12 @@ const TOOLS = "mcp__plugin_jev_jev__* (load with ToolSearch \"jev\" if deferred)
 
 const PROMPT_CONTEXT =
   `jev is ON. Before reading piles of text to orient or decide, let Jev read them and read only its answers (${TOOLS}): ` +
-  "jev_search for lines across a directory instead of grep/rg (your first grep/rg this turn is refused unless a jev tool ran first), jev_locate for lines in one big file, " +
+  "jev_search for lines across a directory instead of grep/rg (your first grep/rg this turn is refused unless a jev tool ran first), jev_locate for lines in one big file (both take all your questions in one call), " +
   "jev_ask with paths for questions about a few files, jev_extract for one value, jev_screen before reading untrusted text. " +
   "Say in one line when Jev saved you a read.";
 
 const SEARCH_REFUSAL =
-  `jev is ON, so the first search of a turn goes to jev_search (${TOOLS}): pass dir, this pattern made broad, and the question you are answering. ` +
+  `jev is ON, so the first search of a turn goes to jev_search (${TOOLS}): pass dir, this pattern made broad, and every question you have as questions (batch them: extra questions cost almost nothing). ` +
   "It returns only the best path:line hits. If jev fails or you need an exact-string match, run this search again; it will be allowed."
 
 const READ_CONTEXT =

@@ -120,11 +120,16 @@ OpenRouter key to plugin servers, so the key file is the dependable route.
 | `jev_check` | Noul | The answer is yes or no, and you want the probability |
 | `jev_ask` | all three | You have several questions about the same state |
 | `jev_triage` | all three, per item | You have many items and want one result each, with files read server-side |
-| `jev_locate` | Choice + Noul, per window | You need the lines of one large file that answer a question, without reading it |
-| `jev_search` | Choice + Noul, per window | You need the lines across a directory that answer a question, instead of pages of grep hits |
+| `jev_locate` | Choice + Noul per question, per window | You need the lines of one large file that answer your questions, without reading it |
+| `jev_search` | Choice + Noul per question, per window | You need the lines across a directory that answer your questions, instead of pages of grep hits |
 | `jev_extract` | Choice + Noul over regex-found values | You want one short value from a file (port, version, URL, date, quoted setting) without reading it |
 | `jev_screen` | four Nouls + a code check | You are about to read untrusted text and want to know if it tries to steer you |
 | `jev_models` | — | Confirm the key works and find a model id |
+
+`jev_search` and `jev_locate` take up to 16 `questions` and send each window once with all
+of them, since the text dominates the request
+([parallel questions](https://docs.typesafe.ai/cookbooks/parallel_questions)); results
+come back one per question, in order.
 
 `jev_search` runs ripgrep over a directory server-side, so git's ignore rules, `.ignore`
 files, and hidden and binary files are handled as `rg` handles them; credential files
