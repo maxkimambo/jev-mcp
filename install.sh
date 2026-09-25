@@ -43,8 +43,8 @@ install_claude() {
     say "Claude Code: updating the jev-mcp marketplace"
     claude plugin marketplace update jev-mcp
   else
-    say "Claude Code: adding the jev-mcp marketplace from $SOURCE"
-    claude plugin marketplace add "$SOURCE"
+    say "Claude Code: adding the jev-mcp marketplace from ${LOCAL:-$REPO}"
+    claude plugin marketplace add "${LOCAL:-$REPO}"
   fi
   if claude plugin list 2>/dev/null | grep -q '❯ jev@jev-mcp$'; then
     claude plugin update jev@jev-mcp
