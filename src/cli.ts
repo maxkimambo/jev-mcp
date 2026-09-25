@@ -23,7 +23,8 @@ const TURNS = join(HOME, "turns");
 
 /** Whole-file reads above this size are worth a nudge; roughly 400 lines of code. */
 const BIG_FILE_BYTES = 16_000;
-const SEARCH_COMMAND = /(^|[;&|(]\s*)(rg|grep|ag|ack)\s/;
+/** A search starts a command; after a pipe, rg or grep only filters another command's output. */
+const SEARCH_COMMAND = /(^|[;&(]\s*)(rg|grep|ag|ack)\s/;
 
 const TOOLS = "mcp__plugin_jev_jev__* (load with ToolSearch \"jev\" if deferred)";
 

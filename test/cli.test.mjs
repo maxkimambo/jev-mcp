@@ -78,6 +78,8 @@ test("the first search after a prompt is refused toward jev_search, the next one
   run(h, ["on"]);
   for (const first of [grep, bashRg]) {
     hook(h, "prompt-hook", { session_id: session });
+    const filter = { session_id: session, tool_name: "Bash", tool_input: { command: "npm test 2>&1 | rg fail" } };
+    assert.equal(hook(h, "tool-hook", filter), undefined, "filtering a command's output is not a code search");
     const out = hook(h, "tool-hook", first);
     assert.equal(out.permissionDecision, "deny");
     assert.match(out.permissionDecisionReason, /jev_search/);
