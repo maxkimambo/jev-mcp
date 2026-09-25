@@ -8,21 +8,31 @@ it behind a label.
 
 ## Install
 
-Requires Node 20.12+, [ripgrep](https://github.com/BurntSushi/ripgrep) on PATH for
-`jev_search`, optionally [trafilatura](https://github.com/adbar/trafilatura) and
-[markitdown](https://github.com/microsoft/markitdown) for `jev_rank_pages`
-(`uv tool install trafilatura` and `uv tool install 'markitdown[pdf,docx,pptx,xlsx]'`), and
-a TypeSafe API key from
-[console.typesafe.ai](https://console.typesafe.ai/settings/keys).
+```bash
+curl -fsSL https://raw.githubusercontent.com/maxkimambo/jev-mcp/main/install.sh | sh
+```
+
+It needs Claude Code and Node 20.12+, and installs or updates everything else:
+
+- the Claude Code plugin (server, hooks, `/jev:jev` command, skill);
+- [ripgrep](https://github.com/BurntSushi/ripgrep) for `jev_search`, through Homebrew or uv;
+- [trafilatura](https://github.com/adbar/trafilatura) and
+  [markitdown](https://github.com/microsoft/markitdown) for `jev_rank_pages`, through
+  [uv](https://docs.astral.sh/uv), which it installs if missing;
+- your API key, asked for with hidden input and saved to `~/.config/jev/api_key` (0600).
+  Get one from [console.typesafe.ai](https://console.typesafe.ai/settings/keys) or
+  [OpenRouter](https://openrouter.ai/~typesafe/jev-latest).
+
+Run it again to update. `JEV_SOURCE=/path/to/jev-mcp sh install.sh` installs from a
+checkout instead of GitHub.
 
 ### Claude Code plugin
 
-The plugin runs this checkout's build, so build it first, then install from the
-directory:
+The plugin runs `bundle/`, a self-contained build committed to the repository, so
+installing from git needs no build step. By hand:
 
 ```bash
-make build
-claude plugin marketplace add /path/to/jev-mcp
+claude plugin marketplace add maxkimambo/jev-mcp
 claude plugin install jev@jev-mcp
 ```
 
@@ -44,7 +54,8 @@ on:
 Switch and ledger live in `~/.claude/jev-think/` (`JEV_HOME` overrides it), shared
 between the `/jev` command and the server through `JEV_SWITCH_FILE` and `JEV_LEDGER`.
 Claude Code runs a copy made at install time (`~/.claude/plugins/cache/`), so after
-`make build` bump the version and reinstall, or the old build keeps running. The command
+`make build` (which rebuilds `bundle/`; commit it with the change) bump the version and
+reinstall, or the old build keeps running. The command
 is `/jev:jev on|off|status`; plugin commands are always prefixed with the plugin name.
 
 ### Any MCP client
