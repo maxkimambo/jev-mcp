@@ -86,13 +86,38 @@ test("fetchPage never reaches a private address, directly or through a redirect"
   }
 });
 
-/** A stand-in for the markitdown CLI: echoes its arguments and how many bytes it read. */
-function fakeMarkitdown() {
-  const bin = join(mkdtempSync(join(tmpdir(), "jev-md-")), "markitdown");
-  writeFileSync(bin, `#!${process.execPath}\nlet n = 0; process.stdin.on("data", (c) => (n += c.length)).on("end", () => console.log("# converted " + process.argv.slice(2).join(" ") + " from " + n + " bytes"));\n`);
+/** A stand-in converter CLI: runs `body` with its arguments in `args` and stdin read into `input`. */
+function fakeTool(body) {
+  const bin = join(mkdtempSync(join(tmpdir(), "jev-tool-")), "tool");
+  writeFileSync(bin, `#!${process.execPath}\nlet input = ""; process.stdin.on("data", (c) => (input += c)).on("end", () => { const args = process.argv.slice(2); ${body} });\n`);
   chmodSync(bin, 0o755);
   return bin;
 }
+
+const fakeMarkitdown = () => fakeTool('console.log("# converted " + args.join(" ") + " from " + input.length + " bytes")');
+
+test("fetchPage extracts the main content of HTML through trafilatura", async () => {
+  const site = await pageServer();
+  try {
+    const trafilatura = fakeTool('console.log("# main content via " + args.join(" ") + (input.includes("<h1>Title</h1>") ? " of the page" : ""))');
+    const page = await fetchPage(`${site.base}/html`, { allowHosts: allow, signal: signal(), trafilatura });
+    assert.equal(page.text.trim(), "# main content via --output-format markdown --no-comments --recall of the page");
+  } finally {
+    await site.close();
+  }
+});
+
+test("fetchPage falls back to plain text when trafilatura is missing or extracts nothing", async () => {
+  const site = await pageServer();
+  try {
+    for (const trafilatura of ["/nonexistent/trafilatura", fakeTool(""), fakeTool("process.exit(1)")]) {
+      const page = await fetchPage(`${site.base}/html`, { allowHosts: allow, signal: signal(), trafilatura });
+      assert.equal(page.text, "Title\nTom & Jerry 's page", trafilatura);
+    }
+  } finally {
+    await site.close();
+  }
+});
 
 test("fetchPage hands PDF and Office pages to markitdown over stdin", async () => {
   const site = await pageServer();

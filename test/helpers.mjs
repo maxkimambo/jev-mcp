@@ -118,6 +118,9 @@ export async function withClient({ baseUrl, withKey = true, env = {} } = {}, fn)
     PATH: process.env.PATH,
     HOME: process.env.HOME,
     JEV_KEY_FILE: "/nonexistent/jev-mcp-test/key",
+    // Converters installed on this machine must not change what the suite sees.
+    JEV_MARKITDOWN_PATH: "/nonexistent/jev-mcp-test/markitdown",
+    JEV_TRAFILATURA_PATH: "/nonexistent/jev-mcp-test/trafilatura",
     ...env,
   };
   // An env entry set to undefined unsets it, e.g. to exercise the default key path.

@@ -81,6 +81,8 @@ export interface FetchOptions {
   maxBytes?: number;
   /** markitdown binary, for PDF and Office pages. */
   markitdown?: string;
+  /** trafilatura binary, to keep only the main content of HTML pages. */
+  trafilatura?: string;
 }
 
 export interface Page {
@@ -101,26 +103,49 @@ const DOCUMENT_TYPES: Record<string, string> = {
   [`${OFFICE}.presentationml.presentation`]: "pptx",
   [`${OFFICE}.spreadsheetml.sheet`]: "xlsx",
 };
-const MARKITDOWN_TIMEOUT_MS = 30_000;
+const CONVERTER_TIMEOUT_MS = 30_000;
 
-/** Convert offline through markitdown's stdin; it never fetches anything itself. */
-function markitdown(bin: string, body: Buffer, type: string, signal: AbortSignal): Promise<string> {
+/**
+ * Run a converter CLI over bytes we already fetched, through its stdin, so it
+ * never fetches anything past the address guard itself.
+ */
+function convert(bin: string, args: string[], body: Buffer, signal: AbortSignal): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = execFile(
-      bin,
-      ["-m", type, "-x", DOCUMENT_TYPES[type]!],
-      { signal, timeout: MARKITDOWN_TIMEOUT_MS, maxBuffer: 50_000_000, encoding: "utf8" },
-      (error, stdout, stderr) => {
-        if (!error) return resolve(stdout);
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-          return reject(new Error(`PDF and Office pages need markitdown: uv tool install 'markitdown[pdf,docx,pptx,xlsx]', or set JEV_MARKITDOWN_PATH.`));
-        }
-        reject(new Error(`markitdown could not convert the page: ${stderr.trim().split("\n").pop() || error.message}`));
-      },
-    );
+    const child = execFile(bin, args, { signal, timeout: CONVERTER_TIMEOUT_MS, maxBuffer: 50_000_000, encoding: "utf8" }, (error, stdout, stderr) => {
+      if (!error) return resolve(stdout);
+      reject(Object.assign(new Error(stderr.trim().split("\n").pop() || error.message), { code: (error as NodeJS.ErrnoException).code }));
+    });
     child.stdin?.on("error", () => {}); // a converter that exits early closes stdin; its exit code reports why
     child.stdin?.end(body);
   });
+}
+
+async function markitdown(bin: string, body: Buffer, type: string, signal: AbortSignal): Promise<string> {
+  try {
+    return await convert(bin, ["-m", type, "-x", DOCUMENT_TYPES[type]!], body, signal);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new Error(`PDF and Office pages need markitdown: uv tool install 'markitdown[pdf,docx,pptx,xlsx]', or set JEV_MARKITDOWN_PATH.`);
+    }
+    throw new Error(`markitdown could not convert the page: ${(error as Error).message}`);
+  }
+}
+
+/**
+ * The page's main content without menus, footers and ads, favouring recall: a
+ * missed answer costs more than a little noise. Falls back to plain text when
+ * trafilatura is missing, fails, or finds no main content.
+ */
+async function mainContent(bin: string | undefined, html: string, signal: AbortSignal): Promise<string> {
+  if (bin) {
+    try {
+      const markdown = (await convert(bin, ["--output-format", "markdown", "--no-comments", "--recall"], Buffer.from(html), signal)).trim();
+      if (markdown) return markdown;
+    } catch {
+      // plain text below
+    }
+  }
+  return htmlToText(html);
 }
 
 function guardedLookup(allowHosts: ReadonlySet<string>): LookupFunction {
@@ -212,6 +237,6 @@ export async function fetchPage(href: string, options: FetchOptions): Promise<Pa
     } catch {
       raw = new TextDecoder("utf-8").decode(body);
     }
-    return { url: url.href, text: HTML_TYPES.test(type) ? htmlToText(raw) : raw };
+    return { url: url.href, text: HTML_TYPES.test(type) ? await mainContent(options.trafilatura, raw, options.signal) : raw };
   }
 }
