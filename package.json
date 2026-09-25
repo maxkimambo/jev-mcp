@@ -30,17 +30,17 @@
     "system-one",
     "classification",
     "confidence",
-    "ai"
+    "ai",
+    "pi-package"
   ],
   "scripts": {
     "build": "tsc && npm run bundle",
-    "prepare": "npm run build",
     "prepublishOnly": "npm run typecheck && npm test",
     "start": "node bundle/index.js",
     "typecheck": "tsc --noEmit",
     "test": "node --test test/*.test.mjs",
     "test:e2e": "node --test test/e2e.test.mjs",
-    "bundle": "esbuild src/index.ts src/cli.ts --bundle --platform=node --format=esm --target=node20 --outdir=bundle --log-level=warning --banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\""
+    "bundle": "esbuild src/index.ts src/cli.ts src/pi.ts --bundle --platform=node --format=esm --target=node20 --outdir=bundle --log-level=warning --banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\""
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
@@ -57,5 +57,13 @@
   },
   "publishConfig": {
     "access": "public"
+  },
+  "pi": {
+    "extensions": [
+      "./bundle/pi.js"
+    ],
+    "skills": [
+      "./skills"
+    ]
   }
 }
