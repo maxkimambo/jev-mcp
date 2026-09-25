@@ -9,7 +9,9 @@ it behind a label.
 ## Install
 
 Requires Node 20.12+, [ripgrep](https://github.com/BurntSushi/ripgrep) on PATH for
-`jev_search`, and a TypeSafe API key from
+`jev_search`, optionally [markitdown](https://github.com/microsoft/markitdown) for PDF and
+Office pages in `jev_rank_pages` (`uv tool install 'markitdown[pdf,docx,pptx,xlsx]'`), and
+a TypeSafe API key from
 [console.typesafe.ai](https://console.typesafe.ai/settings/keys).
 
 ### Claude Code plugin
@@ -123,8 +125,17 @@ OpenRouter key to plugin servers, so the key file is the dependable route.
 | `jev_locate` | Choice + Noul per question, per window | You need the lines of one large file that answer your questions, without reading it |
 | `jev_search` | Choice + Noul per question, per window | You need the lines across a directory that answer your questions, instead of pages of grep hits |
 | `jev_extract` | Choice + Noul per question over regex-found values | You want short values from a file (port, version, URL, date, quoted setting) without reading it |
+| `jev_rank_pages` | one Noul per question, per page window | You have search results and want the page that answers, before fetching any into your context |
 | `jev_screen` | four Nouls + a code check | You are about to read untrusted text and want to know if it tries to steer you |
 | `jev_models` | — | Confirm the key works and find a model id |
+
+`jev_rank_pages` fetches up to 20 URLs server-side and never returns their text. It
+only fetches https, and refuses any host that resolves to a private, loopback or
+link-local address, checked on the connection itself and again on every redirect, so
+a search result cannot point it at your LAN or a cloud metadata endpoint. It asks for
+markdown first (`Accept: text/markdown`), which docs platforms usually serve; HTML is
+reduced to text; PDF and Office documents go through markitdown's stdin, fully offline.
+Pages above four windows are skipped as too long to judge.
 
 `jev_search`, `jev_locate` and `jev_extract` take up to 16 `questions` and send each window
 once with all of them, since the text dominates the request
@@ -299,6 +310,8 @@ answer: which tool replaces which read, how to phrase the question, and how to a
 | `JEV_CONCURRENCY` | Parallel requests within one `jev_triage` call. Defaults to 4, capped at 16. |
 | `JEV_FILE_ROOTS` | Directories `jev_triage`, `jev_ask` `paths` and `jev_locate` may read below. Defaults to the working directory; `off` disables file reads. |
 | `JEV_RG_PATH` | ripgrep binary for `jev_search`. Defaults to `rg` on PATH. |
+| `JEV_MARKITDOWN_PATH` | markitdown binary for PDF and Office pages in `jev_rank_pages`. Defaults to `markitdown` on PATH. |
+| `JEV_ALLOW_HOSTS` | Comma-separated hosts `jev_rank_pages` may fetch even though they resolve to private addresses, over http too, e.g. an intranet wiki. Empty by default. |
 | `JEV_KEY_FILE` | Key file path. Defaults to `$XDG_CONFIG_HOME/jev/api_key`, i.e. `~/.config/jev/api_key`. Must be 0600 and yours. Always refused as a `path` item. |
 | `TYPESAFE_LOG_LEVEL` | SDK verbosity. Safe at any level; all output goes to stderr. |
 
