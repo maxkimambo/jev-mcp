@@ -11,7 +11,7 @@
       "source": "./",
       "displayName": "TypeSafe Jev",
       "description": "Let TypeSafe Jev read files, logs and search results so the agent reads only the answer: search, locate, extract, screen, ask and triage, plus classify, score and check. Off by default; /jev on.",
-      "version": "0.13.0",
+      "version": "0.14.0",
       "homepage": "https://github.com/maxkimambo/jev-mcp",
       "repository": "https://github.com/maxkimambo/jev-mcp",
       "license": "MIT",

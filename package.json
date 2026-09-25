@@ -1,6 +1,6 @@
 {
   "name": "jev-mcp",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "description": "Let TypeSafe Jev read files, logs and search results so your coding agent reads only the answer. For Claude Code, Codex and pi.",
   "type": "module",
   "license": "MIT",
