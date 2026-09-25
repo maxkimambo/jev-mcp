@@ -208,12 +208,14 @@ test("rank_pages picks the page that answers each question from a set of search 
         },
       }),
     );
-    assert.ok(body.pages.every((p) => !p.error), JSON.stringify(body.pages));
-    assert.deepEqual(
-      body.results.map((r) => r.pages[0].url),
-      [pages.citation, pages.parallel, pages.plugins],
-      JSON.stringify(body.results.map((r) => r.pages.map((p) => `${p.url.split("/").pop()} ${p.probability}`))),
-    );
+    assert.deepEqual(body.failed, []);
+    const pick = (r) => body.pages[r.ranking[0].page];
+    assert.deepEqual(body.results.map(pick), [pages.citation, pages.parallel, pages.plugins], JSON.stringify(body.results.map((r) => r.ranking)));
+    // The answer lines carry the facts themselves, so no page has to be fetched.
+    const said = body.results.map((r) => r.answer.lines.map((l) => l.text).join("\n"));
+    assert.match(said[0], /0\.8/, said[0]);
+    assert.match(said[1], /12\.2|cheaper/i, said[1]);
+    assert.match(said[2], /mcp/i, said[2]);
   });
 });
 

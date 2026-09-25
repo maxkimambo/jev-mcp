@@ -22,7 +22,7 @@ export async function startMock() {
   // can hand the server a malformed response and prove it is rejected.
   // `delayMs` holds each response so a test can observe how many requests are
   // in flight at once; `maxInFlight` records the peak.
-  const state = { confidence: 0.9, noul: 0.5, status: 200, body: null, answers: null, delayMs: 0, inFlight: 0, maxInFlight: 0 };
+  const state = { confidence: 0.9, noul: 0.5, noulById: {}, status: 200, body: null, answers: null, delayMs: 0, inFlight: 0, maxInFlight: 0 };
 
   const server = createServer((req, res) => {
     let raw = "";
@@ -58,7 +58,7 @@ export async function startMock() {
       const answers = {};
       for (const [id, q] of Object.entries(parsed.questions ?? {})) {
         if (q.type === "noul") {
-          answers[id] = { type: "noul", noul: state.noul };
+          answers[id] = { type: "noul", noul: state.noulById[id] ?? state.noul };
         } else if (q.type === "choice") {
           const keys = Object.keys(q.criteria ?? {});
           answers[id] = {

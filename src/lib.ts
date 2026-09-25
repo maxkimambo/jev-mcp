@@ -645,6 +645,41 @@ export function packBlocks(sizes: readonly number[], maxChars: number, maxPer = 
 }
 
 /** Split text at line boundaries into chunks of at most `maxChars`. */
+/**
+ * Pieces of at most `max` chars for picking the lines that answer, each with its
+ * 1-based source line. A line longer than `max` splits into its sentences; a
+ * sentence still too long packs its words; a word still too long is cut.
+ */
+export function segmentLines(text: string, max: number): { line: number; text: string }[] {
+  const out: { line: number; text: string }[] = [];
+  text.split(/\r?\n/).forEach((raw, i) => {
+    const line = raw.trim();
+    if (!line) return;
+    if (line.length <= max) {
+      out.push({ line: i + 1, text: line });
+      return;
+    }
+    for (const sentence of line.split(/(?<=[.!?;:])\s+/)) {
+      if (sentence.length <= max) {
+        out.push({ line: i + 1, text: sentence });
+        continue;
+      }
+      let piece = "";
+      for (const word of sentence.split(/\s+/)) {
+        for (const part of word.length <= max ? [word] : word.match(new RegExp(`.{1,${max}}`, "g"))!) {
+          if (piece && piece.length + 1 + part.length > max) {
+            out.push({ line: i + 1, text: piece });
+            piece = "";
+          }
+          piece = piece ? `${piece} ${part}` : part;
+        }
+      }
+      if (piece) out.push({ line: i + 1, text: piece });
+    }
+  });
+  return out;
+}
+
 export function chunkText(text: string, maxChars: number): string[] {
   const chunks: string[] = [];
   let current: string | undefined;
